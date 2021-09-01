@@ -36,7 +36,7 @@ fn handle_connection(mut stream: TcpStream) {
     }
     println!("{} requested {}", addr, get_path);
 
-    // Turn the path from the URL/GET request into the path for the file system: (ToDo)
+    // Turn the path from the URL/GET request into the path for the file system:
     //   1) Always use the parent directory of the binary as the root directory
     //   2) unescape the URL encoding ("%20" etc.)
     let binary_path: &String = &env::args().next().expect("Name of binary missing as 0th command line argument");
