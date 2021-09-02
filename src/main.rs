@@ -9,7 +9,7 @@ use percent_encoding::percent_decode_str;
 fn main() {
     println!("Starting server...");
 
-    let listener = TcpListener::bind("127.0.0.1:8080").expect("Creating a TCP listener failed");
+    let listener = TcpListener::bind("0.0.0.0:8080").expect("Creating a TCP listener failed");
 
     println!("Server started on {}.", listener.local_addr().unwrap());
 
