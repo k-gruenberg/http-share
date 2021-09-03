@@ -63,14 +63,37 @@ fn handle_connection(mut stream: TcpStream) {
             }
     };
 
-    // Now, create the complete HTTP response (with header containing the 'Content-Length'):
-    let mut response: Vec<u8> = format!(
-        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n",
-        content.len()).as_bytes().into();
-    response.append(&mut content);
+    // Now, create the complete HTTP response with headers:
+    let mut response: Vec<u8>;
+    // Because of iOS we have to differentiate between 2 cases, a normal "full response" and a "range response" (for videos):
+    if http_request.contains("Range: bytes=") { // iOS always requests ranges of video files and expects an according response!:
+        // cf. https://stackoverflow.com/questions/23071164/grails-ios-specific-returning-video-mp4-file-gives-broken-pipe-exception-g
+        let range = http_request
+            .split("\r\n") // All request headers as separate lines
+            .filter(|s| s.starts_with("Range: bytes=")) // Take only the (correctly formatted) "Range" header
+            .next()
+            .unwrap() // This is (essentially) safe because we checked that the string contains "Range: bytes=" above.
+            .strip_prefix("Range: bytes=")
+            .unwrap(); // This is safe because of the 'starts_with' check above.
+        // Now, `range` is string of the form "0-1".
+        let mut start_and_end_index = range.split('-');
+        let start_index = start_and_end_index.next().unwrap(); // (Unwrapping here should always work as `split` always returns at least 1 item.)
+        let end_index = start_and_end_index.next().expect("range in 'Range' header is not of the form x-y");
+
+        // Now, we can finally create the response for the iOS device:
+        response = format!(
+            "HTTP/1.1 206 Partial Content\r\nAccept-Ranges: bytes\r\nContent-Range: bytes {}-{}/{}\r\n\r\n",
+            start_index, end_index, content.len()).as_bytes().into();
+        response.append(&mut content[start_index.parse().unwrap()..=end_index.parse().unwrap()].to_vec()); // Only respond with the requested bytes! "=" because end index in HTTP is inclusive (I think)
+    } else { // The "normal" (either non-video or non-iOS) case, i.e. just return the entire content directly:
+        response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n",
+            content.len()).as_bytes().into();
+        response.append(&mut content);
+    }
 
     // Send the HTTP response to the client:
-    stream.write(&response).unwrap();
-    stream.flush().unwrap();
+    stream.write(&response).unwrap_or_else(|err_str| {println!("Response Error ({}): {}", addr, err_str); 0});
+    stream.flush().unwrap_or_else(|_| println!("Error when flushing response stream!"));
 
 }
