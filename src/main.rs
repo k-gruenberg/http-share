@@ -69,15 +69,15 @@ fn handle_connection(mut stream: TcpStream) {
         }
     };
     if path_metadata.is_dir() {
-        match dir_response(fs_path, root_dir, &mut stream) {
-            Ok(()) => (),
-            Err(err) => {
-                HTTPResponse::new_500_server_error(err.to_string());
-                return;
-            }
+        if let Err(err) = dir_response(fs_path, root_dir, &mut stream) {
+            HTTPResponse::new_500_server_error(err.to_string());
+            return;
         }
     } else {
-        file_response(&http_request, fs_path, &mut stream);
+        if let Err(err) = file_response(&http_request, fs_path, &mut stream) {
+            HTTPResponse::new_500_server_error(err.to_string());
+            return;
+        }
     }
 }
 
@@ -99,7 +99,7 @@ fn file_response(
         )?;
     } else {
         // The "normal" (either non-video or non-iOS) case, i.e. just return the entire content directly:
-        HTTPResponse::write_200_ok_file_to_stream(filepath, stream);
+        HTTPResponse::write_200_ok_file_to_stream(filepath, stream)?;
     }
     Ok(())
 }
