@@ -29,8 +29,7 @@ fn handle_connection(mut stream: TcpStream) {
     let http_request: HTTPRequest = match HTTPRequest::read_from_tcp_stream(&mut stream) {
         Ok(http_request) => http_request,
         Err(_err) => {
-            HTTPResponse::new_500_server_error("Could not read HTTP request")
-                .send_to_tcp_stream(&mut stream);
+            HTTPResponse::new_500_server_error("Could not read HTTP request").send_to_tcp_stream(&mut stream);
             return;
         }
     };
@@ -38,8 +37,7 @@ fn handle_connection(mut stream: TcpStream) {
 
     // Sanity check the requested GET path for security reasons:
     if !get_path.starts_with('/') {
-        HTTPResponse::new_500_server_error("GET path does not start with a '/'!")
-            .send_to_tcp_stream(&mut stream);
+        HTTPResponse::new_500_server_error("GET path does not start with a '/'!").send_to_tcp_stream(&mut stream);
         return;
     }
 
@@ -49,12 +47,8 @@ fn handle_connection(mut stream: TcpStream) {
     // Turn the path from the URL/GET request into the path for the file system:
     //   1) Always use the parent directory of the binary as the root directory
     //   2) unescape the URL encoding ("%20" etc.)
-    let binary_path: &String = &env::args()
-        .next()
-        .expect("Name of binary missing as 0th command line argument");
-    let root_dir: &Path = Path::new(binary_path)
-        .parent()
-        .expect("Binary has no parent");
+    let binary_path: &String = &env::args().next().expect("Name of binary missing as 0th command line argument");
+    let root_dir: &Path = Path::new(binary_path).parent().expect("Binary has no parent");
     let decoded_get_path: &str = &percent_decode_str(get_path).decode_utf8().unwrap();
     let fs_path_buffer: PathBuf = root_dir.join(&decoded_get_path[1..]); // The join function does not like when the path to adjoin starts with a '/'
     let fs_path: &Path = fs_path_buffer.as_path();
@@ -63,8 +57,7 @@ fn handle_connection(mut stream: TcpStream) {
     let path_metadata = match fs::metadata(fs_path) {
         Ok(metadata) => metadata,
         Err(_) => {
-            HTTPResponse::new_400_not_found(fs_path.to_string_lossy())
-                .send_to_tcp_stream(&mut stream);
+            HTTPResponse::new_400_not_found(fs_path.to_string_lossy()).send_to_tcp_stream(&mut stream);
             return;
         }
     };
@@ -82,21 +75,13 @@ fn handle_connection(mut stream: TcpStream) {
 }
 
 /// Responds to `stream` with the file contents queried by `filepath`.
-fn file_response(
-    http_request: &HTTPRequest,
-    filepath: &Path,
-    stream: &mut TcpStream,
-) -> io::Result<()> {
+fn file_response(http_request: &HTTPRequest, filepath: &Path, stream: &mut TcpStream) -> io::Result<()> {
     // Because of iOS we have to differentiate between 2 cases, a normal "full response" and a "range response" (for videos):
     if http_request.contains_range_header() {
         // iOS always requests ranges of video files and expects an according response!:
         // Now that we know the requested range, we can create the response for the iOS device:
         // Only respond with the requested bytes! "=" because end index in HTTP is inclusive (I think):
-        HTTPResponse::write_206_partial_file_to_stream(
-            filepath,
-            http_request.get_requested_range(),
-            stream,
-        )?;
+        HTTPResponse::write_206_partial_file_to_stream(filepath, http_request.get_requested_range(), stream)?;
     } else {
         // The "normal" (either non-video or non-iOS) case, i.e. just return the entire content directly:
         HTTPResponse::write_200_ok_file_to_stream(filepath, stream)?;
@@ -107,31 +92,16 @@ fn file_response(
 /// Responds to `stream` with a list of all entries in `dirpath`.
 fn dir_response(dirpath: &Path, root_dir: &Path, stream: &mut TcpStream) -> io::Result<()> {
     let mut folder_items: Vec<String> = fs::read_dir(dirpath)?
-        .map(|path| {
-            path.unwrap()
-                .path()
-                .strip_prefix(root_dir)
-                .unwrap()
-                .display()
-                .to_string()
-        }) // turn a path ("ReadDir") iterator into a String iterator
+        .map(|path| { path.unwrap().path().strip_prefix(root_dir).unwrap().display().to_string() }) // turn a path ("ReadDir") iterator into a String iterator
         .collect(); // The only reason we collect into a Vector is so that we can sort the folder items alphabetically!
     let mut response: Vec<u8> = if !folder_items.is_empty() {
         folder_items.sort(); // Display the folder items in alphabetical order.
-        folder_items
-            .iter()
-            .map(|path| {
-                format!(
-                    "<a href=\"/{}\">{}</a><br>\r\n",
-                    path,
-                    path.split('/').last().unwrap()
-                )
-            }) // turn the path Strings into HTML links; The "/" is important!
+        folder_items.iter()
+            .map(|path| { format!( "<a href=\"/{}\">{}</a><br>\r\n", path, path.split('/').last().unwrap()) }) // turn the path Strings into HTML links; The "/" is important!
             .fold(String::from(""), |str1, str2| str1 + &str2) // concatenate all the Strings of the iterator together into 1 single String
             .into()
     } else {
-        "This folder is empty.".into() // Tell the user when a folder is empty instead of just giving him an
-                                       // empty page.
+        "This folder is empty.".into() // Tell the user when a folder is empty instead of just giving him an empty page.
     };
     let http_response = HTTPResponse::new_200_ok(&mut response);
     http_response.send_to_tcp_stream(stream)
@@ -149,27 +119,13 @@ fn fs_path_to_content(fs_path: &Path, root_dir: &Path) -> Vec<u8> {
             // Returns an iterator over the entries within a directory.
             Ok(paths) => {
                 // The path specified a directory which was successfully opened(/"read").
-                let mut folder_items: Vec<String> = paths
-                    .map(|path| {
-                        path.unwrap()
-                            .path()
-                            .strip_prefix(root_dir)
-                            .unwrap()
-                            .display()
-                            .to_string()
-                    }) // turn a path ("ReadDir") iterator into a String iterator
-                    .collect(); // The only reason we collect into a Vector is so that we can sort the folder items alphabetically!
+                let mut folder_items: Vec<String> = paths.map(|path| {
+                        path.unwrap().path().strip_prefix(root_dir).unwrap().display().to_string()
+                    }).collect(); // The only reason we collect into a Vector is so that we can sort the folder items alphabetically!
                 if !folder_items.is_empty() {
                     folder_items.sort(); // Display the folder items in alphabetical order.
-                    folder_items
-                        .iter()
-                        .map(|path| {
-                            format!(
-                                "<a href=\"/{}\">{}</a><br>\r\n",
-                                path,
-                                path.split('/').last().unwrap()
-                            )
-                        }) // turn the path Strings into HTML links; The "/" is important!
+                    folder_items.iter()
+                        .map(|path| { format!("<a href=\"/{}\">{}</a><br>\r\n", path, path.split('/').last().unwrap()) }) // turn the path Strings into HTML links; The "/" is important!
                         .fold(String::from(""), |str1, str2| str1 + &str2) // concatenate all the Strings of the iterator together into 1 single String
                         .into()
                 } else {
@@ -212,19 +168,14 @@ impl HTTPRequest {
     /// Check using the `contains_range_header` function beforehand!
     fn get_requested_range(&self) -> (u64, u64) {
         // cf. https://stackoverflow.com/questions/23071164/grails-ios-specific-returning-video-mp4-file-gives-broken-pipe-exception-g
-        let range = self
-            .http_request
-            .split("\r\n") // All request headers as separate lines
+        let range = self.http_request.split("\r\n") // All request headers as separate lines
             .find(|s| s.starts_with("Range: bytes=")) // Take only the (correctly formatted) "Range" header
             .unwrap() // This is (essentially) safe because we checked that the string contains "Range: bytes=" above.
             .strip_prefix("Range: bytes=")
-            .unwrap(); // This is safe because of the 'starts_with' check above.
-                       // Now, `range` is string of the form "0-1".
+            .unwrap(); // This is safe because of the 'starts_with' check above. Now, `range` is string of the form "0-1".
         let mut start_and_end_index = range.split('-');
         let start_index = start_and_end_index.next().unwrap(); // (Unwrapping here should always work as `split` always returns at least 1 item.)
-        let end_index = start_and_end_index
-            .next()
-            .expect("range in 'Range' header is not of the form x-y");
+        let end_index = start_and_end_index.next().expect("range in 'Range' header is not of the form x-y");
         return (start_index.parse().unwrap(), end_index.parse().unwrap());
     }
 }
@@ -248,41 +199,22 @@ struct HTTPResponse {
 impl HTTPResponse {
     /// Create a new 200 OK HTTP response.
     fn new_200_ok(content: &mut Vec<u8>) -> Self {
-        let mut http_response: Vec<u8> = format!(
-            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n",
-            content.len()
-        )
-        .as_bytes()
-        .into();
+        let mut http_response: Vec<u8> = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", content.len()).as_bytes().into();
         http_response.append(content);
         Self { http_response }
     }
 
     /// Create a new 500 Internal Server Error response with the given `error_message`.
     fn new_500_server_error<T: AsRef<str>>(error_message: T) -> Self {
-        let http_response: Vec<u8> = format!(
-            "HTTP/1.1 500 Internal Server Error\r\n\
-            Content-Length: {}\r\n\r\n\
-            <h1>Internal Server Error occurred</h1>{}",
-            error_message.as_ref().len(),
-            error_message.as_ref()
-        )
-        .as_bytes()
-        .to_vec();
+        let http_response: Vec<u8> = format!("HTTP/1.1 500 Internal Server Error\r\nContent-Length: {}\r\n\r\n<h1>Internal Server Error occurred</h1>{}", error_message.as_ref().len(), error_message.as_ref())
+        .as_bytes().to_vec();
         Self { http_response }
     }
 
     /// Create a new 500 Internal Server Error response with the given `error_message`.
     fn new_400_not_found<T: AsRef<str>>(filename: T) -> Self {
-        let http_response: Vec<u8> = format!(
-            "HTTP/1.1 404 Not Found\r\n\
-            Content-Length: {}\r\n\r\n\
-            Could not find file {}",
-            filename.as_ref().len(),
-            filename.as_ref()
-        )
-        .as_bytes()
-        .to_vec();
+        let http_response: Vec<u8> = format!("HTTP/1.1 404 Not Found\r\nContent-Length: {}\r\n\r\nCould not find file {}", filename.as_ref().len(), filename.as_ref())
+        .as_bytes().to_vec();
         Self { http_response }
     }
 
@@ -308,21 +240,14 @@ impl HTTPResponse {
     /// Create a new 206 Partial Content HTTP response.
     fn new_206_partial_content(content: &[u8], start_index: &str, end_index: &str) -> Self {
         // cf. https://stackoverflow.com/questions/23071164/grails-ios-specific-returning-video-mp4-file-gives-broken-pipe-exception-g
-        let mut http_response: Vec<u8> = format!(
-            "HTTP/1.1 206 Partial Content\r\nAccept-Ranges: bytes\r\nContent-Range: bytes {}-{}/{}\r\n\r\n",
-            start_index, end_index, content.len()).as_bytes().into();
-        http_response.append(
-            &mut content[start_index.parse().unwrap()..=end_index.parse().unwrap()].to_vec(),
-        ); // Only respond with the requested bytes! "=" because end index in HTTP is inclusive (I think)
+        let mut http_response: Vec<u8> = format!("HTTP/1.1 206 Partial Content\r\nAccept-Ranges: bytes\r\nContent-Range: bytes {}-{}/{}\r\n\r\n", start_index, end_index, content.len())
+            .as_bytes().into();
+        http_response.append(&mut content[start_index.parse().unwrap()..=end_index.parse().unwrap()].to_vec()); // Only respond with the requested bytes! "=" because end index in HTTP is inclusive (I think)
         return Self { http_response };
     }
 
     /// Directly writes the file contents of `filepath` to `stream` in range of bytes from `range`.
-    fn write_206_partial_file_to_stream(
-        filepath: &Path,
-        range: (u64, u64),
-        stream: &mut TcpStream,
-    ) -> io::Result<()> {
+    fn write_206_partial_file_to_stream(filepath: &Path, range: (u64, u64), stream: &mut TcpStream) -> io::Result<()> {
         // Try to open the file before writing `206 Partial Content`, so that the HTTP status code can still be
         // changed in case of an error.
         let mut file = File::open(filepath)?;
@@ -331,9 +256,7 @@ impl HTTPResponse {
         // Only read bytes in given range from file
         let mut partial_file = file.take(range.1 - range.0);
         // Write http response header
-        stream.write(
-            b"HTTP/1.1 206 Partial Content\r\nAccept-Ranges: bytes\r\nContent-Range: bytes ",
-        );
+        stream.write(b"HTTP/1.1 206 Partial Content\r\nAccept-Ranges: bytes\r\nContent-Range: bytes ", );
         stream.write(range.0.to_string().as_bytes());
         stream.write(b"-");
         stream.write(range.1.to_string().as_bytes());
