@@ -206,15 +206,15 @@ impl HTTPResponse {
 
     /// Create a new 500 Internal Server Error response with the given `error_message`.
     fn new_500_server_error<T: AsRef<str>>(error_message: T) -> Self {
-        let http_response: Vec<u8> = format!("HTTP/1.1 500 Internal Server Error\r\nContent-Length: {}\r\n\r\n<h1>Internal Server Error occurred</h1>{}", error_message.as_ref().len(), error_message.as_ref())
-        .as_bytes().to_vec();
+        let error_message = format!("Internal Server Error occurred: {}", error_message.as_ref());
+        let http_response: Vec<u8> = format!("HTTP/1.1 500 Internal Server Error\r\nContent-Length: {}\r\n\r\n{}", error_message.len(), error_message).as_bytes().to_vec();
         Self { http_response }
     }
 
     /// Create a new 500 Internal Server Error response with the given `error_message`.
     fn new_400_not_found<T: AsRef<str>>(filename: T) -> Self {
-        let http_response: Vec<u8> = format!("HTTP/1.1 404 Not Found\r\nContent-Length: {}\r\n\r\nCould not find file {}", filename.as_ref().len(), filename.as_ref())
-        .as_bytes().to_vec();
+        let message = format!("Could not find file {}", filename.as_ref());
+        let http_response: Vec<u8> = format!("HTTP/1.1 404 Not Found\r\nContent-Length: {}\r\n\r\n{}", message.len(), message).as_bytes().to_vec();
         Self { http_response }
     }
 
