@@ -228,9 +228,7 @@ impl HTTPResponse {
         let mut file = File::open(filepath)?;
         let file_size = file.metadata()?.len();
         // Write http response header
-        stream.write(b"HTTP/1.1 200 OK\r\nContent-Length: ");
-        stream.write(file_size.to_string().as_bytes());
-        stream.write(b"\r\n\r\n");
+        stream.write(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", file_size).as_bytes());
         // Write file contents to stream
         io::copy(&mut file, stream);
         stream.flush()?;
@@ -256,11 +254,7 @@ impl HTTPResponse {
         // Only read bytes in given range from file
         let mut partial_file = file.take(range.1 - range.0);
         // Write http response header
-        stream.write(b"HTTP/1.1 206 Partial Content\r\nAccept-Ranges: bytes\r\nContent-Range: bytes ", );
-        stream.write(range.0.to_string().as_bytes());
-        stream.write(b"-");
-        stream.write(range.1.to_string().as_bytes());
-        stream.write(b"\r\n\r\n");
+        stream.write(format!("HTTP/1.1 206 Partial Content\r\nAccept-Ranges: bytes\r\nContent-Range: bytes {}-{}\r\n\r\n", range.0, range.1).as_bytes());
         // Write file contents to stream
         io::copy(&mut partial_file, stream)?;
         stream.flush()?;
