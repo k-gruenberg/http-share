@@ -2,7 +2,7 @@ use percent_encoding::percent_decode_str;
 use std::env;
 use std::fs;
 use std::fs::File;
-use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write, Error, ErrorKind};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::thread;
@@ -30,7 +30,7 @@ fn handle_connection(mut stream: TcpStream) -> std::io::Result<()> {
         Ok(http_request) => http_request,
         Err(_err) => {
             HTTPResponse::new_500_server_error("Could not read HTTP request").send_to_tcp_stream(&mut stream)?;
-            return Ok(());
+            return Err(Error::new(ErrorKind::Other, format!("TCP stream from {:?} could not be read!", stream.peer_addr())));
         }
     };
     let get_path: &str = http_request.get_get_path();
@@ -38,11 +38,11 @@ fn handle_connection(mut stream: TcpStream) -> std::io::Result<()> {
     // Sanity check the requested GET path for security reasons:
     if !get_path.starts_with('/') {
         HTTPResponse::new_500_server_error("GET path does not start with a '/'!").send_to_tcp_stream(&mut stream)?;
-        return Ok(());
+        return Err(Error::new(ErrorKind::Other, format!("{:?} requested {} which does not start with a '/'!", stream.peer_addr(), get_path)));
     }
 
     // Log the HTTP request to console:
-    println!("{:?} requested {}", stream.peer_addr(), get_path);
+    println!("{} requested {}", stream.peer_addr().map_or("???".to_string(), |addr| addr.to_string()), get_path);
 
     // Turn the path from the URL/GET request into the path for the file system:
     //   1) Always use the parent directory of the binary as the root directory
@@ -57,19 +57,19 @@ fn handle_connection(mut stream: TcpStream) -> std::io::Result<()> {
     let path_metadata = match fs::metadata(fs_path) {
         Ok(metadata) => metadata,
         Err(_) => {
-            HTTPResponse::new_400_not_found(fs_path.to_string_lossy()).send_to_tcp_stream(&mut stream)?;
-            return Ok(());
+            HTTPResponse::new_404_not_found(fs_path.to_string_lossy()).send_to_tcp_stream(&mut stream)?;
+            return Err(Error::new(ErrorKind::Other, format!("File {} not found!", fs_path.display())));
         }
     };
     if path_metadata.is_dir() {
         if let Err(err) = dir_response(fs_path, root_dir, &mut stream) {
             HTTPResponse::new_500_server_error(err.to_string());
-            return Ok(());
+            return Err(Error::new(ErrorKind::Other, format!("Directory Response error: {}", err)));
         }
     } else {
         if let Err(err) = file_response(&http_request, fs_path, &mut stream) {
             HTTPResponse::new_500_server_error(err.to_string());
-            return Ok(());
+            return Err(Error::new(ErrorKind::Other, format!("File Response error: {}", err)));
         }
     };
     Ok(())
@@ -80,8 +80,7 @@ fn file_response(http_request: &HTTPRequest, filepath: &Path, stream: &mut TcpSt
     // Because of iOS we have to differentiate between 2 cases, a normal "full response" and a "range response" (for videos):
     if http_request.contains_range_header() {
         // iOS always requests ranges of video files and expects an according response!:
-        // Now that we know the requested range, we can create the response for the iOS device:
-        // Only respond with the requested bytes! "=" because end index in HTTP is inclusive (I think):
+        // Parse the requested range from the request, so we can create the response for the iOS device:
         HTTPResponse::write_206_partial_file_to_stream(filepath, http_request.get_requested_range(), stream)?;
     } else {
         // The "normal" (either non-video or non-iOS) case, i.e. just return the entire content directly:
@@ -148,7 +147,7 @@ impl HTTPRequest {
     /// Create a new `HTTPRequest` by reading an HTTP request from a `TcpStream`.
     fn read_from_tcp_stream(stream: &mut TcpStream) -> io::Result<Self> {
         let mut request_buffer = [0u8; 1024];
-        stream.read_exact(&mut request_buffer)?; // "GET /[path] HTTP/1.1 [...]"
+        stream.read(&mut request_buffer)?; // "GET /[path] HTTP/1.1 [...]"
         return Ok(Self {
             http_request: String::from_utf8_lossy(&request_buffer).to_string(),
         });
@@ -213,8 +212,8 @@ impl HTTPResponse {
         Self { http_response }
     }
 
-    /// Create a new 500 Internal Server Error response with the given `error_message`.
-    fn new_400_not_found<T: AsRef<str>>(filename: T) -> Self {
+    /// Create a new 404 Not Found Error response.
+    fn new_404_not_found<T: AsRef<str>>(filename: T) -> Self {
         let message = format!("Could not find file {}", filename.as_ref());
         let http_response: Vec<u8> = format!("HTTP/1.1 404 Not Found\r\nContent-Length: {}\r\n\r\n{}", message.len(), message).as_bytes().to_vec();
         Self { http_response }
@@ -255,9 +254,10 @@ impl HTTPResponse {
         // Place read pointer at given start byte
         file.seek(SeekFrom::Start(range.0))?;
         // Only read bytes in given range from file
-        let mut partial_file = file.take(range.1 - range.0);
+        let mut partial_file = file.take(range.1 - range.0 + 1); // +1 because end index in HTTP is inclusive!
         // Write http response header
-        stream.write(format!("HTTP/1.1 206 Partial Content\r\nAccept-Ranges: bytes\r\nContent-Range: bytes {}-{}\r\n\r\n", range.0, range.1).as_bytes())?;
+        let file_size: u64 = File::open(filepath)?.metadata()?.len();
+        stream.write(format!("HTTP/1.1 206 Partial Content\r\nAccept-Ranges: bytes\r\nContent-Range: bytes {}-{}/{}\r\n\r\n", range.0, range.1, file_size).as_bytes())?;
         // Write file contents to stream
         io::copy(&mut partial_file, stream)?;
         stream.flush()?;
