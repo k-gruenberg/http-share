@@ -19,26 +19,26 @@ fn main() {
         let stream = stream.expect("The iterator returned by incoming() will never return None");
 
         thread::spawn(|| {
-            handle_connection(stream);
+            handle_connection(stream).unwrap_or_else(|err_str| {println!("Error: {}", err_str)});
         });
     }
 }
 
-fn handle_connection(mut stream: TcpStream) {
+fn handle_connection(mut stream: TcpStream) -> std::io::Result<()> {
     // Read and parse the HTTP request:
     let http_request: HTTPRequest = match HTTPRequest::read_from_tcp_stream(&mut stream) {
         Ok(http_request) => http_request,
         Err(_err) => {
-            HTTPResponse::new_500_server_error("Could not read HTTP request").send_to_tcp_stream(&mut stream);
-            return;
+            HTTPResponse::new_500_server_error("Could not read HTTP request").send_to_tcp_stream(&mut stream)?;
+            return Ok(());
         }
     };
     let get_path: &str = http_request.get_get_path();
 
     // Sanity check the requested GET path for security reasons:
     if !get_path.starts_with('/') {
-        HTTPResponse::new_500_server_error("GET path does not start with a '/'!").send_to_tcp_stream(&mut stream);
-        return;
+        HTTPResponse::new_500_server_error("GET path does not start with a '/'!").send_to_tcp_stream(&mut stream)?;
+        return Ok(());
     }
 
     // Log the HTTP request to console:
@@ -57,21 +57,22 @@ fn handle_connection(mut stream: TcpStream) {
     let path_metadata = match fs::metadata(fs_path) {
         Ok(metadata) => metadata,
         Err(_) => {
-            HTTPResponse::new_400_not_found(fs_path.to_string_lossy()).send_to_tcp_stream(&mut stream);
-            return;
+            HTTPResponse::new_400_not_found(fs_path.to_string_lossy()).send_to_tcp_stream(&mut stream)?;
+            return Ok(());
         }
     };
     if path_metadata.is_dir() {
         if let Err(err) = dir_response(fs_path, root_dir, &mut stream) {
             HTTPResponse::new_500_server_error(err.to_string());
-            return;
+            return Ok(());
         }
     } else {
         if let Err(err) = file_response(&http_request, fs_path, &mut stream) {
             HTTPResponse::new_500_server_error(err.to_string());
-            return;
+            return Ok(());
         }
-    }
+    };
+    Ok(())
 }
 
 /// Responds to `stream` with the file contents queried by `filepath`.
@@ -112,6 +113,7 @@ fn dir_response(dirpath: &Path, root_dir: &Path, stream: &mut TcpStream) -> io::
 ///   Case B) `fs_path` specifies a directory: return a list of hyperlinks ('<a href>'s) to all the files in that dir
 ///   Case C) `fs_path` specifies neither a file nor a directory: return the error string
 /// The `root_dir` argument is needed for Case B) to know how much of the path prefix to strip.
+#[allow(dead_code)] // Old code, now see 'dir_response'
 fn fs_path_to_content(fs_path: &Path, root_dir: &Path) -> Vec<u8> {
     match fs::read(fs_path) {
         Ok(data) => data, // The path specified a file which was successfully read, return the read data.
@@ -228,14 +230,15 @@ impl HTTPResponse {
         let mut file = File::open(filepath)?;
         let file_size = file.metadata()?.len();
         // Write http response header
-        stream.write(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", file_size).as_bytes());
+        stream.write(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", file_size).as_bytes())?;
         // Write file contents to stream
-        io::copy(&mut file, stream);
+        io::copy(&mut file, stream)?;
         stream.flush()?;
         Ok(())
     }
 
     /// Create a new 206 Partial Content HTTP response.
+    #[allow(dead_code)] // Only 'write_206_partial_file_to_stream' is actually used in this project, i.e. the more memory-efficient version for sending files.
     fn new_206_partial_content(content: &[u8], start_index: &str, end_index: &str) -> Self {
         // cf. https://stackoverflow.com/questions/23071164/grails-ios-specific-returning-video-mp4-file-gives-broken-pipe-exception-g
         let mut http_response: Vec<u8> = format!("HTTP/1.1 206 Partial Content\r\nAccept-Ranges: bytes\r\nContent-Range: bytes {}-{}/{}\r\n\r\n", start_index, end_index, content.len())
@@ -254,7 +257,7 @@ impl HTTPResponse {
         // Only read bytes in given range from file
         let mut partial_file = file.take(range.1 - range.0);
         // Write http response header
-        stream.write(format!("HTTP/1.1 206 Partial Content\r\nAccept-Ranges: bytes\r\nContent-Range: bytes {}-{}\r\n\r\n", range.0, range.1).as_bytes());
+        stream.write(format!("HTTP/1.1 206 Partial Content\r\nAccept-Ranges: bytes\r\nContent-Range: bytes {}-{}\r\n\r\n", range.0, range.1).as_bytes())?;
         // Write file contents to stream
         io::copy(&mut partial_file, stream)?;
         stream.flush()?;
