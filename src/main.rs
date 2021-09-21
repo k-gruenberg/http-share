@@ -1,4 +1,4 @@
-use percent_encoding::percent_decode_str;
+use percent_encoding::{percent_decode_str, utf8_percent_encode, NON_ALPHANUMERIC};
 use std::env;
 use std::fs;
 use std::fs::File;
@@ -14,7 +14,7 @@ fn main() {
 
     println!("Server started on {}.", listener.local_addr().unwrap());
 
-    // Listen fpr incoming TCP/HTTP connections and handle each of them in a separate thread:
+    // Listen for incoming TCP/HTTP connections and handle each of them in a separate thread:
     for stream in listener.incoming() {
         let stream = stream.expect("The iterator returned by incoming() will never return None");
 
@@ -97,7 +97,7 @@ fn dir_response(dirpath: &Path, root_dir: &Path, stream: &mut TcpStream) -> io::
     let mut response: Vec<u8> = if !folder_items.is_empty() {
         folder_items.sort(); // Display the folder items in alphabetical order.
         folder_items.iter()
-            .map(|path| { format!( "<a href=\"/{}\">{}</a><br>\r\n", path, path.split('/').last().unwrap()) }) // turn the path Strings into HTML links; The "/" is important!
+            .map(|path| { format!( "<a href=\"/{}\">{}</a><br>\r\n", utf8_percent_encode(path, NON_ALPHANUMERIC).to_string(), path.split('/').last().unwrap()) }) // turn the path Strings into HTML links; The "/" is important!
             .fold(String::from(""), |str1, str2| str1 + &str2) // concatenate all the Strings of the iterator together into 1 single String
             .into()
     } else {
