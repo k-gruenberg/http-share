@@ -19,12 +19,6 @@ fn main() {
         }
     };
 
-    /*let listener = TcpListener::bind("0.0.0.0:8080")
-        .unwrap_or_else(|err_str| {
-            println!("Error: Server could not be started as creating a TCP listener failed: {}", err_str);
-            return;
-        });*/
-
     println!("Server started on {}.", listener.local_addr().unwrap());
 
     // Listen for incoming TCP/HTTP connections and handle each of them in a separate thread:
@@ -57,6 +51,15 @@ fn handle_connection(mut stream: TcpStream) -> std::io::Result<()> {
     // Log the HTTP request to console:
     println!("{} requested {}", stream.peer_addr().map_or("???".to_string(), |addr| addr.to_string()), get_path);
 
+    // See if the requested URL contains a question mark ('?') and therefore a query string:
+    let query_string: Option<&str> = if get_path.contains('?') {
+        Some(get_path.split('?').nth(1).unwrap()) // unwrapping here is safe because we checked that it contains a '?'
+    } else {
+        None
+    };
+    // Now remove the query string from the GET path, if there is one
+    let get_path: &str = get_path.split('?').nth(0).unwrap();
+
     // Turn the path from the URL/GET request into the path for the file system:
     //   1) Always use the parent directory of the binary as the root directory
     //   2) unescape the URL encoding ("%20" etc.)
@@ -76,7 +79,7 @@ fn handle_connection(mut stream: TcpStream) -> std::io::Result<()> {
         }
     };
     if path_metadata.is_dir() {
-        if let Err(err) = dir_response(fs_path, root_dir, &mut stream) {
+        if let Err(err) = dir_response(fs_path, root_dir, &mut stream, query_string) {
             HTTPResponse::new_500_server_error(err.to_string());
             return Err(Error::new(ErrorKind::Other, format!("Directory Response error: {}", err)));
         }
@@ -104,25 +107,77 @@ fn file_response(http_request: &HTTPRequest, filepath: &Path, stream: &mut TcpSt
 }
 
 /// Responds to `stream` with a list of all entries in `dir_path`.
-fn dir_response(dir_path: &Path, root_dir: &Path, stream: &mut TcpStream) -> io::Result<()> {
+/// The `root_dir` is given to know which prefix to strip from the file paths.
+/// The optional `query_string` (what comes after the '?' in the URL) is given because it might
+/// contain information on how to display the contents of the directory.
+fn dir_response(dir_path: &Path, root_dir: &Path, stream: &mut TcpStream, query_string: Option<&str>) -> io::Result<()> {
     let mut folder_items: Vec<String> = fs::read_dir(dir_path)?
         .map(|path| { path.unwrap().path().strip_prefix(root_dir).unwrap().display().to_string() }) // turn a path ("ReadDir") iterator into a String iterator
         .collect(); // The only reason we collect into a Vector is so that we can sort the folder items alphabetically!
     let html_body: String = if !folder_items.is_empty() {
         folder_items.sort(); // Display the folder items in alphabetical order.
-        folder_items.iter()
-            .map(|path| { format!( "<a href=\"/{}\">{}</a><br>\r\n", utf8_percent_encode(path, NON_ALPHANUMERIC).to_string(), path.split('/').last().unwrap()) }) // turn the path Strings into HTML links; The "/" is important!
-            .fold(String::from(""), |str1, str2| str1 + &str2) // concatenate all the Strings of the iterator together into 1 single String
+        format_body(folder_items, query_string)
     } else {
         "This folder is empty.".to_string() // Tell the user when a folder is empty instead of just giving him an empty page.
     };
     let http_response = HTTPResponse::new_200_ok(
         &mut format!(
-            "<!DOCTYPE html><html><head><meta charset=\"utf-8\"/></head><body>{}</body></html>", // important because of the UTF-8!!
+            "<!DOCTYPE html><html><head><meta charset=\"utf-8\"/></head><body>{}</body></html>\r\n", // important because of the UTF-8!!
             html_body
         ).into()
     );
     http_response.send_to_tcp_stream(stream)
+}
+
+/// A helper function for `dir_response`.
+/// Takes a Vec of the relative file paths in a folder as Strings (`folder_items`) and
+/// returns the HTML body. The layout may differ depending on the `query_string` (the stuff that comes
+/// after the '?' in the URL) given by the user.
+fn format_body(folder_items: Vec<String>, query_string: Option<&str>) -> String {
+    let folder_items = folder_items.iter()
+        .map(|path| { format_path(path, query_string) }); // turn the path Strings into HTML links, possibly within a <td>-tag
+
+    let lower_body = match query_string {
+        // Table View:
+        Some("view=table") => format!(
+            "<table style=\"table-layout:fixed;width:100%;\">\r\n{}</table>\r\n",
+            folder_items
+                .enumerate()
+                .map(|(i, hyperlink)| {
+                    match i % 3 {
+                        0 => format!("<tr>\r\n{}", &hyperlink),
+                        1 => hyperlink,
+                        _ => format!("{}</tr>\r\n", &hyperlink)
+                    }
+                })
+                .fold(String::from(""), |str1, str2| str1 + &str2)
+        ),
+        // Default = List View:
+        _ => folder_items.fold(String::from(""), |str1, str2| str1 + &str2) // concatenate all the Strings of the iterator together into 1 single String
+    };
+
+    // At last, add the links/buttons that let the user change the layout.
+    return format!(
+        "<a href=\"javascript:window.location.search='view=list';\">List View</a>  |  \r\n\
+         <a href=\"javascript:window.location.search='view=table';\">Table View</a>\r\n\
+         <br><br>\r\n\
+         {}", lower_body
+    );
+}
+
+/// A helper function for `format_body`.
+/// Formats just the <a>-hyperlinks depending on the layout specified in the `query_string`.
+fn format_path(path: &String, query_string: Option<&str>) -> String {
+    // <a href="hyperlink">display_name</a>
+    let hyperlink = utf8_percent_encode(path, NON_ALPHANUMERIC).to_string();
+    let display_name = path.split('/').last().unwrap(); // only display the file name to the user
+
+    match query_string {
+        // Table View:
+        Some("view=table") => format!("<td style=\"border: 1px solid black;\"><a href=\"/{}\"><img src=\"/{}\" alt=\"{}\" width=\"100%\"></a></td>\r\n", hyperlink, hyperlink, display_name),
+        // Default = List View:
+        _ => format!("<a href=\"/{}\">{}</a><br>\r\n", hyperlink, display_name) // The "/" is important!
+    }
 }
 
 /// Takes a file system `Path` and returns the (HTML) content:
