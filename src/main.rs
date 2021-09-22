@@ -8,9 +8,22 @@ use std::path::{Path, PathBuf};
 use std::thread;
 
 fn main() {
+    println!(); // separator
     println!("Starting server...");
 
-    let listener = TcpListener::bind("0.0.0.0:8080").expect("Creating a TCP listener failed");
+    let listener = match TcpListener::bind("0.0.0.0:8080") {
+        Ok(listener) => listener,
+        Err(err) => {
+            println!("Error: Server could not be started as creating a TCP listener failed: {}", err);
+            return;
+        }
+    };
+
+    /*let listener = TcpListener::bind("0.0.0.0:8080")
+        .unwrap_or_else(|err_str| {
+            println!("Error: Server could not be started as creating a TCP listener failed: {}", err_str);
+            return;
+        });*/
 
     println!("Server started on {}.", listener.local_addr().unwrap());
 
@@ -57,8 +70,9 @@ fn handle_connection(mut stream: TcpStream) -> std::io::Result<()> {
     let path_metadata = match fs::metadata(fs_path) {
         Ok(metadata) => metadata,
         Err(_) => {
-            HTTPResponse::new_404_not_found(fs_path.to_string_lossy()).send_to_tcp_stream(&mut stream)?;
-            return Err(Error::new(ErrorKind::Other, format!("File {} not found!", fs_path.display())));
+            HTTPResponse::new_404_not_found(fs_path.strip_prefix(root_dir).unwrap().to_string_lossy()).send_to_tcp_stream(&mut stream)?;
+            // The '.strip_prefix' is important for not leaking the folder structure of the server to the web user!
+            return Err(Error::new(ErrorKind::Other, format!("Could not find file {}", fs_path.display())));
         }
     };
     if path_metadata.is_dir() {
@@ -89,21 +103,25 @@ fn file_response(http_request: &HTTPRequest, filepath: &Path, stream: &mut TcpSt
     Ok(())
 }
 
-/// Responds to `stream` with a list of all entries in `dirpath`.
-fn dir_response(dirpath: &Path, root_dir: &Path, stream: &mut TcpStream) -> io::Result<()> {
-    let mut folder_items: Vec<String> = fs::read_dir(dirpath)?
+/// Responds to `stream` with a list of all entries in `dir_path`.
+fn dir_response(dir_path: &Path, root_dir: &Path, stream: &mut TcpStream) -> io::Result<()> {
+    let mut folder_items: Vec<String> = fs::read_dir(dir_path)?
         .map(|path| { path.unwrap().path().strip_prefix(root_dir).unwrap().display().to_string() }) // turn a path ("ReadDir") iterator into a String iterator
         .collect(); // The only reason we collect into a Vector is so that we can sort the folder items alphabetically!
-    let mut response: Vec<u8> = if !folder_items.is_empty() {
+    let html_body: String = if !folder_items.is_empty() {
         folder_items.sort(); // Display the folder items in alphabetical order.
         folder_items.iter()
             .map(|path| { format!( "<a href=\"/{}\">{}</a><br>\r\n", utf8_percent_encode(path, NON_ALPHANUMERIC).to_string(), path.split('/').last().unwrap()) }) // turn the path Strings into HTML links; The "/" is important!
             .fold(String::from(""), |str1, str2| str1 + &str2) // concatenate all the Strings of the iterator together into 1 single String
-            .into()
     } else {
-        "This folder is empty.".into() // Tell the user when a folder is empty instead of just giving him an empty page.
+        "This folder is empty.".to_string() // Tell the user when a folder is empty instead of just giving him an empty page.
     };
-    let http_response = HTTPResponse::new_200_ok(&mut response);
+    let http_response = HTTPResponse::new_200_ok(
+        &mut format!(
+            "<!DOCTYPE html><html><head><meta charset=\"utf-8\"/></head><body>{}</body></html>", // important because of the UTF-8!!
+            html_body
+        ).into()
+    );
     http_response.send_to_tcp_stream(stream)
 }
 
@@ -214,7 +232,7 @@ impl HTTPResponse {
 
     /// Create a new 404 Not Found Error response.
     fn new_404_not_found<T: AsRef<str>>(filename: T) -> Self {
-        let message = format!("Could not find file {}", filename.as_ref());
+        let message = format!("Error: Could not find file {}", filename.as_ref());
         let http_response: Vec<u8> = format!("HTTP/1.1 404 Not Found\r\nContent-Length: {}\r\n\r\n{}", message.len(), message).as_bytes().to_vec();
         Self { http_response }
     }
