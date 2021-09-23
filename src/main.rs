@@ -116,13 +116,13 @@ fn dir_response(dir_path: &Path, root_dir: &Path, stream: &mut TcpStream, query_
         .collect(); // The only reason we collect into a Vector is so that we can sort the folder items alphabetically!
     let html_body: String = if !folder_items.is_empty() {
         folder_items.sort(); // Display the folder items in alphabetical order.
-        format_body(folder_items, query_string)
+        format_body(folder_items, query_string, dir_path.strip_prefix(root_dir).unwrap().display().to_string())
     } else {
         "This folder is empty.".to_string() // Tell the user when a folder is empty instead of just giving him an empty page.
     };
     let http_response = HTTPResponse::new_200_ok(
         &mut format!(
-            "<!DOCTYPE html><html><head><meta charset=\"utf-8\"/></head><body>{}</body></html>\r\n", // important because of the UTF-8!!
+            "<!DOCTYPE html><html><head><meta charset=\"utf-8\"/></head><body>\r\n{}</body></html>\r\n", // important because of the UTF-8!!
             html_body
         ).into()
     );
@@ -133,7 +133,9 @@ fn dir_response(dir_path: &Path, root_dir: &Path, stream: &mut TcpStream, query_
 /// Takes a Vec of the relative file paths in a folder as Strings (`folder_items`) and
 /// returns the HTML body. The layout may differ depending on the `query_string` (the stuff that comes
 /// after the '?' in the URL) given by the user.
-fn format_body(folder_items: Vec<String>, query_string: Option<&str>) -> String {
+/// The path of the current directory is given in `dir_path` as a String to let the user know where
+/// he currently is.
+fn format_body(folder_items: Vec<String>, query_string: Option<&str>, dir_path: String) -> String {
     let folder_items = folder_items.iter()
         .map(|path| { format_path(path, query_string) }); // turn the path Strings into HTML links, possibly within a <td>-tag
 
@@ -156,12 +158,14 @@ fn format_body(folder_items: Vec<String>, query_string: Option<&str>) -> String 
         _ => folder_items.fold(String::from(""), |str1, str2| str1 + &str2) // concatenate all the Strings of the iterator together into 1 single String
     };
 
-    // At last, add the links/buttons that let the user change the layout.
-    return format!(
-        "<a href=\"javascript:window.location.search='view=list';\">List View</a>  |  \r\n\
-         <a href=\"javascript:window.location.search='view=table';\">Table View</a>\r\n\
-         <br><br>\r\n\
-         {}", lower_body
+    // At last, add the "header" (including links/buttons that let the user change the layout):
+    return format!( // The leading slash ('/') of the path is added manually, cf. `format_path`.
+        "/{}<br>\r\n\
+         <a href=\"javascript:window.location.search='view=list';\">List View</a>  |  \r\n\
+         <a href=\"javascript:window.location.search='view=table';\">Table View</a><br>\r\n\
+         <hr><br>\r\n\
+         {}",
+        dir_path, lower_body
     );
 }
 
