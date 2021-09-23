@@ -18,3 +18,7 @@ Viewing a video file is possible too:
 
 And sub-directories work too, of course:
 ![](images/6.png "")
+
+## ToDo's
+
+* Add support for *HTTP basic access authentication* using an `.htaccess` file and/or command line arguments.
