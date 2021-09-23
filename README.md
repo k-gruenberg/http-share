@@ -21,4 +21,5 @@ And sub-directories work too, of course:
 
 ## ToDo's
 
-* Add support for *HTTP basic access authentication* using an `.htaccess` file and/or command line arguments.
+* Add support for *HTTP basic access authentication* using an `.htaccess`/`.htpasswd` file (or similar) and/or command line arguments.
+* Update this README to the newest version (screenshots).
