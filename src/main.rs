@@ -6,27 +6,29 @@ use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::thread;
 use http_share::{HTTPRequest, HTTPResponse};
+use chrono::Local;
+use chrono::format::{StrftimeItems, DelayedFormat};
 
 fn main() {
     println!(); // separator
-    println!("Starting server...");
+    println!("[{}] Starting server...", date_time_str());
 
     let listener = match TcpListener::bind("0.0.0.0:8080") {
         Ok(listener) => listener,
         Err(err) => {
-            println!("Error: Server could not be started as creating a TCP listener failed: {}", err);
+            eprintln!("[{}] Error: Server could not be started as creating a TCP listener failed: {}", date_time_str(), err);
             return;
         }
     };
 
-    println!("Server started on {}.", listener.local_addr().unwrap());
+    println!("[{}] Server started on {}.", date_time_str(), listener.local_addr().unwrap());
 
     // Listen for incoming TCP/HTTP connections and handle each of them in a separate thread:
     for stream in listener.incoming() {
         let stream = stream.expect("The iterator returned by incoming() will never return None");
 
         thread::spawn(|| {
-            handle_connection(stream).unwrap_or_else(|err_str| {println!("Error: {}", err_str)});
+            handle_connection(stream).unwrap_or_else(|err_str| {eprintln!("[{}] Error: {}", date_time_str(), err_str)});
         });
     }
 }
@@ -49,7 +51,7 @@ fn handle_connection(mut stream: TcpStream) -> std::io::Result<()> {
     }
 
     // Log the HTTP request to console:
-    println!("{} requested {}", stream.peer_addr().map_or("???".to_string(), |addr| addr.to_string()), get_path);
+    println!("[{}] {} requested {}", date_time_str(), stream.peer_addr().map_or("???".to_string(), |addr| addr.to_string()), get_path);
 
     // See if the requested URL contains a question mark ('?') and therefore a query string:
     let query_string: Option<&str> = if get_path.contains('?') {
@@ -136,6 +138,9 @@ fn dir_response(dir_path: &Path, root_dir: &Path, stream: &mut TcpStream, query_
 /// The path of the current directory is given in `dir_path` as a String to let the user know where
 /// he currently is.
 fn format_body(folder_items: Vec<String>, query_string: Option<&str>, dir_path: String) -> String {
+    // Save the number of items (files/directories) in the folder:
+    let folder_size: usize = folder_items.len();
+
     let folder_items = folder_items.iter()
         .map(|path| { format_path(path, query_string) }); // turn the path Strings into HTML links, possibly within a <td>-tag
 
@@ -160,12 +165,12 @@ fn format_body(folder_items: Vec<String>, query_string: Option<&str>, dir_path: 
 
     // At last, add the "header" (including links/buttons that let the user change the layout):
     return format!( // The leading slash ('/') of the path is added manually, cf. `format_path`.
-        "/{}<br>\r\n\
+        "/{} <i>({} items)</i><br>\r\n\
          <a href=\"javascript:window.location.search='view=list';\">List View</a>  |  \r\n\
          <a href=\"javascript:window.location.search='view=table';\">Table View</a><br>\r\n\
          <hr><br>\r\n\
          {}",
-        dir_path, lower_body
+        dir_path, folder_size, lower_body
     );
 }
 
@@ -213,4 +218,9 @@ fn fs_path_to_content(fs_path: &Path, root_dir: &Path) -> Vec<u8> {
             Err(error) => error.to_string().as_bytes().into(), // The path specified neither a file nor a directory!
         },
     }
+}
+
+/// Returns the current date/time in the format "%Y-%m-%d %H:%M:%S", for logging to console.
+fn date_time_str<'a>() -> DelayedFormat<StrftimeItems<'a>> {
+    Local::now().format("%Y-%m-%d %H:%M:%S")
 }
