@@ -21,5 +21,6 @@ And sub-directories work too, of course:
 
 ## ToDo's
 
-* Add support for *HTTP basic access authentication* using an `.htaccess`/`.htpasswd` file (or similar) and/or command line arguments.
+* Add support for *HTTP basic access authentication* using an `.htaccess`/`.htpasswd` file (or similar) and/or command line arguments and/or a simple password prompt in the terminal after starting the binary.
+* **Maybe** beautify the terminal logging with colors.
 * Update this README to the newest version (screenshots).
