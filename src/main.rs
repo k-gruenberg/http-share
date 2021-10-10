@@ -8,6 +8,7 @@ use std::thread;
 use http_share::{HTTPRequest, HTTPResponse};
 use chrono::Local;
 use chrono::format::{StrftimeItems, DelayedFormat};
+use std::process::Command;
 
 fn main() {
     println!(); // separator
@@ -51,7 +52,20 @@ fn handle_connection(mut stream: TcpStream) -> std::io::Result<()> {
     }
 
     // Log the HTTP request to console:
-    println!("[{}] {} requested {}", date_time_str(), stream.peer_addr().map_or("???".to_string(), |addr| addr.to_string()), get_path);
+    if http_request.contains_range_header() {
+        let requested_range = http_request.get_requested_range();
+        println!("[{}] {} requested bytes {}-{} of {}",
+                 date_time_str(),
+                 stream.peer_addr().map_or("???".to_string(), |addr| addr.to_string()),
+                 requested_range.0,
+                 requested_range.1.map(|r| r.to_string()).unwrap_or("".to_string()),
+                 get_path);
+    } else {
+        println!("[{}] {} requested {}",
+                 date_time_str(),
+                 stream.peer_addr().map_or("???".to_string(), |addr| addr.to_string()),
+                 get_path);
+    }
 
     // See if the requested URL contains a question mark ('?') and therefore a query string:
     let query_string: Option<&str> = if get_path.contains('?') {
@@ -86,7 +100,7 @@ fn handle_connection(mut stream: TcpStream) -> std::io::Result<()> {
             return Err(Error::new(ErrorKind::Other, format!("Directory Response error: {}", err)));
         }
     } else {
-        if let Err(err) = file_response(&http_request, fs_path, &mut stream) {
+        if let Err(err) = file_response(&http_request, fs_path, &mut stream, query_string) {
             HTTPResponse::new_500_server_error(err.to_string());
             return Err(Error::new(ErrorKind::Other, format!("File Response error: {}", err)));
         }
@@ -95,17 +109,36 @@ fn handle_connection(mut stream: TcpStream) -> std::io::Result<()> {
 }
 
 /// Responds to `stream` with the file contents queried by `filepath`.
-fn file_response(http_request: &HTTPRequest, filepath: &Path, stream: &mut TcpStream) -> io::Result<()> {
-    // Because of iOS we have to differentiate between 2 cases, a normal "full response" and a "range response" (for videos):
-    if http_request.contains_range_header() {
-        // iOS always requests ranges of video files and expects an according response!:
-        // Parse the requested range from the request, so we can create the response for the iOS device:
-        HTTPResponse::write_206_partial_file_to_stream(filepath, http_request.get_requested_range(), stream)?;
-    } else {
-        // The "normal" (either non-video or non-iOS) case, i.e. just return the entire content directly:
-        HTTPResponse::write_200_ok_file_to_stream(filepath, stream)?;
+fn file_response(http_request: &HTTPRequest, filepath: &Path, stream: &mut TcpStream, query_string: Option<&str>) -> io::Result<()> {
+    // Check if a thumbnail of a video was requested:
+    if let Some("thumbnail") = query_string { // A thumbnail request:
+        // 1.) Execute the 'ffmpeg' command to generate a JPEG thumbnail:
+        let thumbnail_file_name: &str = &format!("http_share_temp_thumbnail_{}.jpg", filepath.file_name().unwrap_or("".as_ref()).to_str().unwrap_or(""));
+        Command::new("ffmpeg")
+            .arg("-ss")
+            .arg("00:00:01.000")
+            .arg("-i")
+            .arg(filepath)
+            .arg("-vframes")
+            .arg("1")
+            .arg(thumbnail_file_name)
+            .output()?;
+        // 2.) Respond with that thumbnail:
+        HTTPResponse::write_200_ok_file_to_stream(Path::new(thumbnail_file_name), stream)?;
+        // 3.) Immediately delete the temporary thumbnail:
+        fs::remove_file(thumbnail_file_name)?;
+    } else { // No thumbnail request, respond with a regular file response:
+        // Because of iOS we have to differentiate between 2 cases, a normal "full response" and a "range response" (for videos):
+        if http_request.contains_range_header() {
+            // iOS always requests ranges of video files and expects an according response!:
+            // Parse the requested range from the request, so we can create the response for the iOS device:
+            HTTPResponse::write_206_partial_file_to_stream(filepath, http_request.get_requested_range(), stream)?;
+        } else {
+            // The "normal" (either non-video or non-iOS) case, i.e. just return the entire content directly:
+            HTTPResponse::write_200_ok_file_to_stream(filepath, stream)?;
+        }
     }
-    Ok(())
+    return Ok(());
 }
 
 /// Responds to `stream` with a list of all entries in `dir_path`.
@@ -183,7 +216,15 @@ fn format_path(path: &String, query_string: Option<&str>) -> String {
 
     match query_string {
         // Table View:
-        Some("view=table") => format!("<td style=\"border: 1px solid black;\"><a href=\"/{}\"><img src=\"/{}\" alt=\"{}\" width=\"100%\"></a></td>\r\n", hyperlink, hyperlink, display_name),
+        Some("view=table") => {
+            if path.ends_with(".mp4") { // Display ffmpeg generated thumbnails for .mp4 files:
+                format!("<td style=\"border: 1px solid black;\"><a href=\"/{}\"><img src=\"/{}?thumbnail\" alt=\"{}\" width=\"100%\"></a></td>\r\n", hyperlink, hyperlink, display_name)
+                // Old approach was to show videos in a <video> tag but that was way too computationally expensive:
+                // format!("<td style=\"border: 1px solid black;\"><video width=\"100%\" preload=\"metadata\" controls src=\"{}\">{}</video></td>\r\n", hyperlink, display_name)
+            } else { // Display all other file types in an HTML <img> Tag with the file name as the alt text:
+                format!("<td style=\"border: 1px solid black;\"><a href=\"/{}\"><img src=\"/{}\" alt=\"{}\" width=\"100%\"></a></td>\r\n", hyperlink, hyperlink, display_name)
+            }
+        },
         // Default = List View:
         _ => format!("<a href=\"/{}\">{}</a><br>\r\n", hyperlink, display_name) // The "/" is important!
     }

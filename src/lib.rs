@@ -32,17 +32,23 @@ impl HTTPRequest {
 
     /// This function will panic when this HTTP request contains no (or an invalid) 'Range' header.
     /// Check using the `contains_range_header` function beforehand!
-    pub fn get_requested_range(&self) -> (u64, u64) {
+    ///
+    /// For more information on the HTTP 'Range' header, see:
+    /// https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Range
+    /// Currently only the following 2 formats are supported!:
+    /// * Range: <unit>=<range-start>-
+    /// * Range: <unit>=<range-start>-<range-end>
+    pub fn get_requested_range(&self) -> (u64, Option<u64>) {
         // cf. https://stackoverflow.com/questions/23071164/grails-ios-specific-returning-video-mp4-file-gives-broken-pipe-exception-g
         let range = self.http_request.split("\r\n") // All request headers as separate lines
             .find(|s| s.starts_with("Range: bytes=")) // Take only the (correctly formatted) "Range" header
             .unwrap() // This is (essentially) safe because we checked that the string contains "Range: bytes=" above.
             .strip_prefix("Range: bytes=")
-            .unwrap(); // This is safe because of the 'starts_with' check above. Now, `range` is string of the form "0-1".
+            .unwrap(); // This is safe because of the 'starts_with' check above. Now, `range` is string of the form "0-1" or "0-" (no <range-end>).
         let mut start_and_end_index = range.split('-');
         let start_index = start_and_end_index.next().unwrap(); // (Unwrapping here should always work as `split` always returns at least 1 item.)
         let end_index = start_and_end_index.next().expect("range in 'Range' header is not of the form x-y");
-        return (start_index.parse().unwrap(), end_index.parse().unwrap());
+        return (start_index.parse().unwrap(), end_index.parse().ok());
     }
 }
 
@@ -112,17 +118,25 @@ impl HTTPResponse {
     }
 
     /// Directly writes the file contents of `filepath` to `stream` in range of bytes from `range`.
-    pub fn write_206_partial_file_to_stream(filepath: &Path, range: (u64, u64), stream: &mut TcpStream) -> io::Result<()> {
+    pub fn write_206_partial_file_to_stream(filepath: &Path, range: (u64, Option<u64>), stream: &mut TcpStream) -> io::Result<()> {
         // Try to open the file before writing `206 Partial Content`, so that the HTTP status code can still be
         // changed in case of an error.
         let mut file = File::open(filepath)?;
         // Place read pointer at given start byte
         file.seek(SeekFrom::Start(range.0))?;
         // Only read bytes in given range from file
-        let mut partial_file = file.take(range.1 - range.0 + 1); // +1 because end index in HTTP is inclusive!
+        let mut partial_file =
+            if let Some(range_end) = range.1 { // There is a <range-end> specified:
+                file.take(range_end - range.0 + 1) // +1 because end index in HTTP is inclusive!
+            } else { // There is no <range-end> specified (e.g. a range of "0-" was requested):
+                file.take(u64::MAX) // take all remaining bytes
+            };
         // Write http response header
         let file_size: u64 = File::open(filepath)?.metadata()?.len();
-        stream.write(format!("HTTP/1.1 206 Partial Content\r\nAccept-Ranges: bytes\r\nContent-Range: bytes {}-{}/{}\r\n\r\n", range.0, range.1, file_size).as_bytes())?;
+        stream.write(format!("HTTP/1.1 206 Partial Content\r\nAccept-Ranges: bytes\r\nContent-Range: bytes {}-{}/{}\r\n\r\n",
+                             range.0,
+                             range.1.map(|r| r.to_string()).unwrap_or("".to_string()), // None -> ""
+                             file_size).as_bytes())?;
         // Write file contents to stream
         io::copy(&mut partial_file, stream)?;
         stream.flush()?;
