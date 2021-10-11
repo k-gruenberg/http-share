@@ -9,6 +9,9 @@ use http_share::{HTTPRequest, HTTPResponse};
 use chrono::Local;
 use chrono::format::{StrftimeItems, DelayedFormat};
 use std::process::Command;
+use separator::Separatable;
+use chrono::{DateTime, Utc};
+use std::time::SystemTime;
 
 fn main() {
     println!(); // separator
@@ -22,7 +25,7 @@ fn main() {
         }
     };
 
-    println!("[{}] Server started on {}.", date_time_str(), listener.local_addr().unwrap());
+    println!("[{}] Server started on {}.", date_time_str(), listener.local_addr().map_or("???".to_string(), |addr| addr.to_string()));
 
     // Listen for incoming TCP/HTTP connections and handle each of them in a separate thread:
     for stream in listener.incoming() {
@@ -178,8 +181,8 @@ fn format_body(folder_items: Vec<String>, query_string: Option<&str>, dir_path: 
         .map(|path| { format_path(path, query_string) }); // turn the path Strings into HTML links, possibly within a <td>-tag
 
     let lower_body = match query_string {
-        // Table View:
-        Some("view=table") => format!(
+        // Grid View (previously called Table View!):
+        Some("view=grid") => format!(
             "<table style=\"table-layout:fixed;width:100%;\">\r\n{}</table>\r\n",
             folder_items
                 .enumerate()
@@ -192,6 +195,20 @@ fn format_body(folder_items: Vec<String>, query_string: Option<&str>, dir_path: 
                 })
                 .fold(String::from(""), |str1, str2| str1 + &str2)
         ),
+        // Table View:
+        Some("view=table") => format!(
+            "<table>\r\n\
+            <tr>\
+                <th style=\"border: 1px solid black;\">Name</th>\
+                <th style=\"border: 1px solid black;\">Size</th>\
+                <th style=\"border: 1px solid black;\">Created</th>\
+                <th style=\"border: 1px solid black;\">Modified</th>\
+                <th style=\"border: 1px solid black;\">Accessed</th>\
+            </tr>\
+            {}\
+            </table>\r\n",
+            folder_items.fold(String::from(""), |str1, str2| str1 + &str2)
+        ),
         // Default = List View:
         _ => folder_items.fold(String::from(""), |str1, str2| str1 + &str2) // concatenate all the Strings of the iterator together into 1 single String
     };
@@ -200,7 +217,8 @@ fn format_body(folder_items: Vec<String>, query_string: Option<&str>, dir_path: 
     return format!( // The leading slash ('/') of the path is added manually, cf. `format_path`.
         "/{} <i>({} items)</i><br>\r\n\
          <a href=\"javascript:window.location.search='view=list';\">List View</a>  |  \r\n\
-         <a href=\"javascript:window.location.search='view=table';\">Table View</a><br>\r\n\
+         <a href=\"javascript:window.location.search='view=table';\">Table View</a>  |  \r\n\
+         <a href=\"javascript:window.location.search='view=grid';\">Grid View</a><br>\r\n\
          <hr><br>\r\n\
          {}",
         dir_path, folder_size, lower_body
@@ -208,15 +226,16 @@ fn format_body(folder_items: Vec<String>, query_string: Option<&str>, dir_path: 
 }
 
 /// A helper function for `format_body`.
-/// Formats just the <a>-hyperlinks depending on the layout specified in the `query_string`.
+/// Formats just the <a>-hyperlinks depending on the layout specified in the `query_string`
+/// (either List, Table or Grid View).
 fn format_path(path: &String, query_string: Option<&str>) -> String {
     // <a href="hyperlink">display_name</a>
     let hyperlink = utf8_percent_encode(path, NON_ALPHANUMERIC).to_string();
     let display_name = path.split('/').last().unwrap(); // only display the file name to the user
 
     match query_string {
-        // Table View:
-        Some("view=table") => {
+        // Grid View (previously called Table View!):
+        Some("view=grid") => {
             if path.ends_with(".mp4") { // Display ffmpeg generated thumbnails for .mp4 files:
                 format!("<td style=\"border: 1px solid black;\"><a href=\"/{}\"><img src=\"/{}?thumbnail\" alt=\"{}\" width=\"100%\"></a></td>\r\n", hyperlink, hyperlink, display_name)
                 // Old approach was to show videos in a <video> tag but that was way too computationally expensive:
@@ -225,9 +244,48 @@ fn format_path(path: &String, query_string: Option<&str>) -> String {
                 format!("<td style=\"border: 1px solid black;\"><a href=\"/{}\"><img src=\"/{}\" alt=\"{}\" width=\"100%\"></a></td>\r\n", hyperlink, hyperlink, display_name)
             }
         },
+        // Table View:
+        Some("view=table") => {
+            // Cf. code in handle_connection()!:
+            let binary_path: &String = &env::args().next().expect("Name of binary missing as 0th command line argument");
+            let root_dir: &Path = Path::new(binary_path).parent().expect("Binary has no parent");
+            let fs_path_buffer: PathBuf = root_dir.join(&path);
+            let fs_path: &Path = fs_path_buffer.as_path();
+
+            let metadata = &fs::metadata(fs_path); //File::open(fs_path).unwrap().metadata(); //&fs::metadata(fs_path);
+            let metadata = metadata.as_ref();
+            format!(
+                "<tr>\
+                <td style=\"border: 1px solid black;\"><a href=\"/{}\">{}</a></td>\
+                <td style=\"border: 1px solid black;\">{}</td>\
+                <td style=\"border: 1px solid black;\">{}</td>\
+                <td style=\"border: 1px solid black;\">{}</td>\
+                <td style=\"border: 1px solid black;\">{}</td>\
+                </tr>\r\n",
+                hyperlink, display_name,
+                metadata.map_or("?".to_string(), |meta|
+                    if meta.is_file() {
+                        meta.len().separated_string() + "B"
+                    } else {
+                        format!("<i>({} items)</i>", fs::read_dir(fs_path).map_or("?".to_string(), |dir| dir.count().to_string()))
+                    }),
+                metadata.map_or("?".to_string(), |meta| system_time_to_string(meta.created())),
+                metadata.map_or("?".to_string(), |meta| system_time_to_string(meta.modified())),
+                metadata.map_or("?".to_string(), |meta| system_time_to_string(meta.accessed())),
+            )
+        },
         // Default = List View:
         _ => format!("<a href=\"/{}\">{}</a><br>\r\n", hyperlink, display_name) // The "/" is important!
     }
+}
+
+/// Helper function for `format_path`.
+fn system_time_to_string(system_time: io::Result<SystemTime>) -> String {
+    return match system_time {
+        Ok(system_time) =>
+            DateTime::<Utc>::from(system_time).format("%Y-%m-%d %H:%M:%S").to_string(),
+        Err(_) => "?".to_string()
+    };
 }
 
 /// Takes a file system `Path` and returns the (HTML) content:
