@@ -2,6 +2,7 @@ use std::fs::File;
 use std::io::{self, Read, Write, Seek, SeekFrom};
 use std::net::TcpStream;
 use std::path::Path;
+use std::fmt::Display;
 
 /// A wrapper around a `String` representing an HTTP request.
 pub struct HTTPRequest {
@@ -50,6 +51,24 @@ impl HTTPRequest {
         let end_index = start_and_end_index.next().expect("range in 'Range' header is not of the form x-y");
         return (start_index.parse().unwrap(), end_index.parse().ok());
     }
+
+    /// Get the username and password the user provided as authorization (if he did).
+    /// Reads the 'Authorization' header of this HTTP request, decodes it (Base64) and returns
+    /// `Some((username, password))` or `None` when no (or an invalid) 'Authorization' header was
+    /// provided.
+    /// Currently only the 'Basic' authentication scheme is supported.
+    pub fn get_authorization(&self) -> Option<(String, String)> {
+        // https://de.wikipedia.org/wiki/HTTP-Authentifizierung
+        //   Example: "Authorization: Basic d2lraTpwZWRpYQ=="
+        //            where "d2lraTpwZWRpYQ==" is the Base64 encoding of "wiki:pedia"
+        //            which stands for username "wiki" and password "pedia"
+        let base64_encoded = self.http_request.split("\r\n") // All request headers as separate lines
+            .find(|s| s.starts_with("Authorization: Basic"))? // Take only the (correctly formatted) "Authorization" header
+            .strip_prefix("Range: bytes=")?;
+        let base64_decoded = String::from_utf8(base64::decode(base64_encoded).ok()?).ok()?;
+        let mut uname_and_pw = base64_decoded.split(":");
+        return Some((uname_and_pw.next()?.to_string(), uname_and_pw.next()?.to_string()));
+    }
 }
 
 impl From<String> for HTTPRequest {
@@ -69,24 +88,40 @@ pub struct HTTPResponse {
 }
 
 impl HTTPResponse {
-    /// Create a new 200 OK HTTP response.
+    /// Create a new '200 OK' HTTP response.
     pub fn new_200_ok(content: &mut Vec<u8>) -> Self {
         let mut http_response: Vec<u8> = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", content.len()).as_bytes().into();
         http_response.append(content);
         Self { http_response }
     }
 
-    /// Create a new 500 Internal Server Error response with the given `error_message`.
-    pub fn new_500_server_error<T: AsRef<str>>(error_message: T) -> Self {
-        let error_message = format!("Internal Server Error occurred: {}", error_message.as_ref());
-        let http_response: Vec<u8> = format!("HTTP/1.1 500 Internal Server Error\r\nContent-Length: {}\r\n\r\n{}", error_message.len(), error_message).as_bytes().to_vec();
+    /// Create a new '206 Partial Content' HTTP response.
+    #[allow(dead_code)] // Only 'write_206_partial_file_to_stream' is actually used in this project, i.e. the more memory-efficient version for sending files.
+    pub fn new_206_partial_content(content: &[u8], start_index: &str, end_index: &str) -> Self {
+        // cf. https://stackoverflow.com/questions/23071164/grails-ios-specific-returning-video-mp4-file-gives-broken-pipe-exception-g
+        let mut http_response: Vec<u8> = format!("HTTP/1.1 206 Partial Content\r\nAccept-Ranges: bytes\r\nContent-Range: bytes {}-{}/{}\r\n\r\n", start_index, end_index, content.len())
+            .as_bytes().into();
+        http_response.append(&mut content[start_index.parse().unwrap()..=end_index.parse().unwrap()].to_vec()); // Only respond with the requested bytes! "=" because end index in HTTP is inclusive (I think)
+        return Self { http_response };
+    }
+
+    /// Create a new '401 Unauthorized' HTTP response.
+    pub fn new_401_unauthorized<D>(realm_name: D) -> Self where D : Display {
+        let http_response: Vec<u8> = format!("HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"{}\"\r\n\r\n", realm_name).as_bytes().into();
         Self { http_response }
     }
 
-    /// Create a new 404 Not Found Error response.
+    /// Create a new '404 Not Found' HTTP response.
     pub fn new_404_not_found<T: AsRef<str>>(filename: T) -> Self {
         let message = format!("Error: Could not find file {}", filename.as_ref());
         let http_response: Vec<u8> = format!("HTTP/1.1 404 Not Found\r\nContent-Length: {}\r\n\r\n{}", message.len(), message).as_bytes().to_vec();
+        Self { http_response }
+    }
+
+    /// Create a new '500 Internal Server Error' HTTP response with the given `error_message`.
+    pub fn new_500_server_error<T: AsRef<str>>(error_message: T) -> Self {
+        let error_message = format!("Internal Server Error occurred: {}", error_message.as_ref());
+        let http_response: Vec<u8> = format!("HTTP/1.1 500 Internal Server Error\r\nContent-Length: {}\r\n\r\n{}", error_message.len(), error_message).as_bytes().to_vec();
         Self { http_response }
     }
 
@@ -105,16 +140,6 @@ impl HTTPResponse {
         io::copy(&mut file, stream)?;
         stream.flush()?;
         Ok(())
-    }
-
-    /// Create a new 206 Partial Content HTTP response.
-    #[allow(dead_code)] // Only 'write_206_partial_file_to_stream' is actually used in this project, i.e. the more memory-efficient version for sending files.
-    pub fn new_206_partial_content(content: &[u8], start_index: &str, end_index: &str) -> Self {
-        // cf. https://stackoverflow.com/questions/23071164/grails-ios-specific-returning-video-mp4-file-gives-broken-pipe-exception-g
-        let mut http_response: Vec<u8> = format!("HTTP/1.1 206 Partial Content\r\nAccept-Ranges: bytes\r\nContent-Range: bytes {}-{}/{}\r\n\r\n", start_index, end_index, content.len())
-            .as_bytes().into();
-        http_response.append(&mut content[start_index.parse().unwrap()..=end_index.parse().unwrap()].to_vec()); // Only respond with the requested bytes! "=" because end index in HTTP is inclusive (I think)
-        return Self { http_response };
     }
 
     /// Directly writes the file contents of `filepath` to `stream` in range of bytes from `range`.
