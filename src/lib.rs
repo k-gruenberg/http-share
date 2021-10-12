@@ -107,7 +107,7 @@ impl HTTPResponse {
 
     /// Create a new '401 Unauthorized' HTTP response.
     /// The "Basic" authentication scheme is requested.
-    pub fn new_401_unauthorized<D>(realm_name: D) -> Self where D : Display {
+    pub fn new_401_unauthorized(realm_name: impl Display) -> Self {
         let http_response: Vec<u8> = format!("HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"{}\"\r\n\r\n", realm_name).as_bytes().into();
         Self { http_response }
     }
