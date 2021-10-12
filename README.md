@@ -21,8 +21,7 @@ And sub-directories work too, of course:
 
 ## ToDo's
 
-* Add the ability to sort by columns in *Table View*.
-* Add the option to choose the number of columns in *Grid View*.
+* **Maybe** add the option to choose the number of columns in *Grid View*.
 * **Maybe** also show folder size in *List View*.
 * **Maybe** prettify the HTML <table> borders.
 * **Maybe** beautify the terminal logging with colors.

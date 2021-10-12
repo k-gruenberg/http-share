@@ -238,17 +238,18 @@ fn format_body(folder_items: Vec<String>, query_string: Option<&str>, dir_path: 
         ),
         // Table View:
         Some("view=table") => format!(
-            "<table>\r\n\
+            "<table id=\"tableViewTable\">\r\n\
             <tr>\
-                <th style=\"border: 1px solid black;\">Name</th>\
-                <th style=\"border: 1px solid black;\">Size</th>\
-                <th style=\"border: 1px solid black;\">Created</th>\
-                <th style=\"border: 1px solid black;\">Modified</th>\
-                <th style=\"border: 1px solid black;\">Accessed</th>\
+                <th onclick=\"sortTable(0)\" style=\"border: 1px solid black;\">Name</th>\
+                <th onclick=\"sortTable(1)\" style=\"border: 1px solid black;\">Size</th>\
+                <th onclick=\"sortTable(2)\" style=\"border: 1px solid black;\">Created</th>\
+                <th onclick=\"sortTable(3)\" style=\"border: 1px solid black;\">Modified</th>\
+                <th onclick=\"sortTable(4)\" style=\"border: 1px solid black;\">Accessed</th>\
             </tr>\
             {}\
-            </table>\r\n",
-            folder_items.fold(String::from(""), |str1, str2| str1 + &str2)
+            </table>\r\n{}\r\n",
+            folder_items.fold(String::from(""), |str1, str2| str1 + &str2),
+            SORT_TABLE_JAVASCRIPT
         ),
         // Default = List View:
         _ => folder_items.fold(String::from(""), |str1, str2| str1 + &str2) // concatenate all the Strings of the iterator together into 1 single String
@@ -364,3 +365,61 @@ fn fs_path_to_content(fs_path: &Path, root_dir: &Path) -> Vec<u8> {
 fn date_time_str<'a>() -> DelayedFormat<StrftimeItems<'a>> {
     Local::now().format("%Y-%m-%d %H:%M:%S")
 }
+
+// Source: https://www.w3schools.com/howto/howto_js_sort_table.asp
+const SORT_TABLE_JAVASCRIPT: &str = "<script>
+function sortTable(n) {
+  var table, rows, switching, i, x, y, shouldSwitch, dir, switchcount = 0;
+  table = document.getElementById(\"tableViewTable\");
+  switching = true;
+  // Set the sorting direction to ascending:
+  dir = \"asc\";
+  /* Make a loop that will continue until
+  no switching has been done: */
+  while (switching) {
+    // Start by saying: no switching is done:
+    switching = false;
+    rows = table.rows;
+    /* Loop through all table rows (except the
+    first, which contains table headers): */
+    for (i = 1; i < (rows.length - 1); i++) {
+      // Start by saying there should be no switching:
+      shouldSwitch = false;
+      /* Get the two elements you want to compare,
+      one from current row and one from the next: */
+      x = rows[i].getElementsByTagName(\"TD\")[n];
+      y = rows[i + 1].getElementsByTagName(\"TD\")[n];
+      /* Check if the two rows should switch place,
+      based on the direction, asc or desc: */
+      if (dir == \"asc\") {
+        if (x.innerHTML.toLowerCase() > y.innerHTML.toLowerCase()) {
+          // If so, mark as a switch and break the loop:
+          shouldSwitch = true;
+          break;
+        }
+      } else if (dir == \"desc\") {
+        if (x.innerHTML.toLowerCase() < y.innerHTML.toLowerCase()) {
+          // If so, mark as a switch and break the loop:
+          shouldSwitch = true;
+          break;
+        }
+      }
+    }
+    if (shouldSwitch) {
+      /* If a switch has been marked, make the switch
+      and mark that a switch has been done: */
+      rows[i].parentNode.insertBefore(rows[i + 1], rows[i]);
+      switching = true;
+      // Each time a switch is done, increase this count by 1:
+      switchcount ++;
+    } else {
+      /* If no switching has been done AND the direction is \"asc\",
+      set the direction to \"desc\" and run the while loop again. */
+      if (switchcount == 0 && dir == \"asc\") {
+        dir = \"desc\";
+        switching = true;
+      }
+    }
+  }
+}
+</script>";
