@@ -21,6 +21,8 @@ And sub-directories work too, of course:
 
 ## ToDo's
 
+* Fix sorting.
+* Remove dead code.
 * ~~**Maybe** add the option to choose the number of columns in *Grid View*.~~
 * ~~**Maybe** also show folder size in *List View*.~~
 * ~~**Maybe** prettify the HTML <table> borders.~~
