@@ -56,15 +56,15 @@ impl HTTPRequest {
     /// Reads the 'Authorization' header of this HTTP request, decodes it (Base64) and returns
     /// `Some((username, password))` or `None` when no (or an invalid) 'Authorization' header was
     /// provided.
-    /// Currently only the 'Basic' authentication scheme is supported.
+    /// Only the 'Basic' authentication scheme is supported.
     pub fn get_authorization(&self) -> Option<(String, String)> {
         // https://de.wikipedia.org/wiki/HTTP-Authentifizierung
         //   Example: "Authorization: Basic d2lraTpwZWRpYQ=="
         //            where "d2lraTpwZWRpYQ==" is the Base64 encoding of "wiki:pedia"
         //            which stands for username "wiki" and password "pedia"
         let base64_encoded = self.http_request.split("\r\n") // All request headers as separate lines
-            .find(|s| s.starts_with("Authorization: Basic"))? // Take only the (correctly formatted) "Authorization" header
-            .strip_prefix("Range: bytes=")?;
+            .find(|s| s.starts_with("Authorization: Basic "))? // Take only the (correctly formatted) "Authorization" header
+            .strip_prefix("Authorization: Basic ")?;
         let base64_decoded = String::from_utf8(base64::decode(base64_encoded).ok()?).ok()?;
         let mut uname_and_pw = base64_decoded.split(":");
         return Some((uname_and_pw.next()?.to_string(), uname_and_pw.next()?.to_string()));
@@ -106,6 +106,7 @@ impl HTTPResponse {
     }
 
     /// Create a new '401 Unauthorized' HTTP response.
+    /// The "Basic" authentication scheme is requested.
     pub fn new_401_unauthorized<D>(realm_name: D) -> Self where D : Display {
         let http_response: Vec<u8> = format!("HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"{}\"\r\n\r\n", realm_name).as_bytes().into();
         Self { http_response }

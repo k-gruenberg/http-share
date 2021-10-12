@@ -21,7 +21,6 @@ And sub-directories work too, of course:
 
 ## ToDo's
 
-* Add support for *HTTP basic access authentication* using an `.htaccess`/`.htpasswd` file (or similar) and/or command line arguments and/or a simple password prompt in the terminal after starting the binary.
 * Add the ability to sort by columns in *Table View*.
 * Add the option to choose the number of columns in *Grid View*.
 * **Maybe** also show folder size in *List View*.

@@ -1,7 +1,7 @@
 use percent_encoding::{percent_decode_str, utf8_percent_encode, NON_ALPHANUMERIC};
 use std::env;
 use std::fs;
-use std::io::{self, Error, ErrorKind};
+use std::io::{self, Error, ErrorKind, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::thread;
@@ -15,6 +15,26 @@ use std::time::SystemTime;
 
 fn main() {
     println!(); // separator
+    
+    println!("Please provide credentials or hit ENTER two times to not use any authorization:");
+    print!("Username: ");
+    io::stdout().flush().unwrap();
+    let mut username = String::new();
+    io::stdin().read_line(&mut username).unwrap();
+    username = username.trim().to_string(); // Trimming is done mainly to get rid of the newline at the end.
+    print!("Password: ");
+    io::stdout().flush().unwrap();
+    let mut password = String::new();
+    io::stdin().read_line(&mut password).unwrap();
+    password = password.trim().to_string();
+    if username != "" || password != "" {
+        println!("Credentials set to: Username: \"{}\" & Password: \"{}\"", username, password);
+    } else {
+        println!("No credentials set.");
+    }
+
+    println!(); // separator
+    
     println!("[{}] Starting server...", date_time_str());
 
     let listener = match TcpListener::bind("0.0.0.0:8080") {
@@ -31,13 +51,18 @@ fn main() {
     for stream in listener.incoming() {
         let stream = stream.expect("The iterator returned by incoming() will never return None");
 
-        thread::spawn(|| {
-            handle_connection(stream).unwrap_or_else(|err_str| {eprintln!("[{}] Error: {}", date_time_str(), err_str)});
+        let username = username.clone(); // https://github.com/rust-lang/rust/issues/41851#issuecomment-332276034
+        let password = password.clone();
+        thread::spawn(move || {
+            handle_connection(stream, username, password).unwrap_or_else(|err_str| {eprintln!("[{}] Error: {}", date_time_str(), err_str)});
         });
     }
 }
 
-fn handle_connection(mut stream: TcpStream) -> std::io::Result<()> {
+/// Handles a connection coming from `stream`.
+/// When `username != "" || password != ""` it also checks whether the correct `username` and
+/// `password` were provided – if not, it responds with a '401 Unauthorized'.
+fn handle_connection(mut stream: TcpStream, username: String, password: String) -> std::io::Result<()> {
     // Read and parse the HTTP request:
     let http_request: HTTPRequest = match HTTPRequest::read_from_tcp_stream(&mut stream) {
         Ok(http_request) => http_request,
@@ -48,10 +73,26 @@ fn handle_connection(mut stream: TcpStream) -> std::io::Result<()> {
     };
     let get_path: &str = http_request.get_get_path();
 
+    // Do the HTTP Auth check:
+    if username != "" || password != "" { // A username and password are necessary, i.e. auth protection is turned on:
+        match http_request.get_authorization() {
+            Some((provided_uname, provided_pw))
+              if provided_uname == username && provided_pw == password => {}, // Uname & PW ok, do nothing and continue...
+            Some((provided_uname, provided_pw)) => { // An invalid authorization was provided:
+                HTTPResponse::new_401_unauthorized("").send_to_tcp_stream(&mut stream)?;
+                return Err(Error::new(ErrorKind::Other, format!("{} requested {} with incorrect credentials: {}:{}", stream.peer_addr().map_or("???".to_string(), |addr| addr.to_string()), get_path, provided_uname, provided_pw)));
+            }
+            None => { // No authorization was provided:
+                HTTPResponse::new_401_unauthorized("").send_to_tcp_stream(&mut stream)?;
+                return Err(Error::new(ErrorKind::Other, format!("{} requested {} without giving credentials!", stream.peer_addr().map_or("???".to_string(), |addr| addr.to_string()), get_path)));
+            }
+        }
+    }
+
     // Sanity check the requested GET path for security reasons:
     if !get_path.starts_with('/') {
         HTTPResponse::new_500_server_error("GET path does not start with a '/'!").send_to_tcp_stream(&mut stream)?;
-        return Err(Error::new(ErrorKind::Other, format!("{:?} requested {} which does not start with a '/'!", stream.peer_addr(), get_path)));
+        return Err(Error::new(ErrorKind::Other, format!("{} requested {} which does not start with a '/'!", stream.peer_addr().map_or("???".to_string(), |addr| addr.to_string()), get_path)));
     }
 
     // Log the HTTP request to console:
