@@ -367,7 +367,9 @@ fn date_time_str<'a>() -> DelayedFormat<StrftimeItems<'a>> {
 }
 
 // Source: https://www.w3schools.com/howto/howto_js_sort_table.asp
-const SORT_TABLE_JAVASCRIPT: &str = "<script>
+const SORT_TABLE_JAVASCRIPT: &str =
+"<!-- Source of the script below: https://www.w3schools.com/howto/howto_js_sort_table.asp -->
+<script>
 function sortTable(n) {
   var table, rows, switching, i, x, y, shouldSwitch, dir, switchcount = 0;
   table = document.getElementById(\"tableViewTable\");
