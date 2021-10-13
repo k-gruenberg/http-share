@@ -12,6 +12,7 @@ use std::process::Command;
 use separator::Separatable;
 use chrono::{DateTime, Utc};
 use std::time::SystemTime;
+use ansi_term::Colour::Red;
 
 fn main() {
     println!(); // separator
@@ -40,7 +41,7 @@ fn main() {
     let listener = match TcpListener::bind("0.0.0.0:8080") {
         Ok(listener) => listener,
         Err(err) => {
-            eprintln!("[{}] Error: Server could not be started as creating a TCP listener failed: {}", date_time_str(), err);
+            eprintln!("{}", Red.paint(format!("[{}] Error: Server could not be started as creating a TCP listener failed: {}", date_time_str(), err)));
             return;
         }
     };
@@ -54,7 +55,9 @@ fn main() {
         let username = username.clone(); // https://github.com/rust-lang/rust/issues/41851#issuecomment-332276034
         let password = password.clone();
         thread::spawn(move || {
-            handle_connection(stream, username, password).unwrap_or_else(|err_str| {eprintln!("[{}] Error: {}", date_time_str(), err_str)});
+            handle_connection(stream, username, password).unwrap_or_else(
+                |err_str| {eprintln!("{}", Red.paint(format!("[{}] Error: {}", date_time_str(), err_str)))}
+            );
         });
     }
 }
@@ -194,7 +197,7 @@ fn dir_response(dir_path: &Path, root_dir: &Path, stream: &mut TcpStream, query_
         .map(|path| { path.unwrap().path().strip_prefix(root_dir).unwrap().display().to_string() }) // turn a path ("ReadDir") iterator into a String iterator
         .collect(); // The only reason we collect into a Vector is so that we can sort the folder items alphabetically!
     let html_body: String = if !folder_items.is_empty() {
-        folder_items.sort(); // Display the folder items in alphabetical order.
+        folder_items.sort_by(|a,b| a.to_lowercase().cmp(&b.to_lowercase())); // Display the folder items in alphabetical order (but case-insensitive!)
         format_body(folder_items, query_string, dir_path.strip_prefix(root_dir).unwrap().display().to_string())
     } else {
         "This folder is empty.".to_string() // Tell the user when a folder is empty instead of just giving him an empty page.
@@ -240,11 +243,11 @@ fn format_body(folder_items: Vec<String>, query_string: Option<&str>, dir_path: 
         Some("view=table") => format!(
             "<table id=\"tableViewTable\">\r\n\
             <tr>\
-                <th onclick=\"sortTable(0)\" style=\"border: 1px solid black;\">Name</th>\
-                <th onclick=\"sortTable(1)\" style=\"border: 1px solid black;\">Size</th>\
-                <th onclick=\"sortTable(2)\" style=\"border: 1px solid black;\">Created</th>\
-                <th onclick=\"sortTable(3)\" style=\"border: 1px solid black;\">Modified</th>\
-                <th onclick=\"sortTable(4)\" style=\"border: 1px solid black;\">Accessed</th>\
+                <th onclick=\"sortTable(0, x => x)\" style=\"border: 1px solid black;\">Name</th>\
+                <th onclick=\"sortTable(1, x => parseInt(x.replaceAll(',','')) || 0)\" style=\"border: 1px solid black;\">Size</th>\
+                <th onclick=\"sortTable(2, x => x)\" style=\"border: 1px solid black;\">Created</th>\
+                <th onclick=\"sortTable(3, x => x)\" style=\"border: 1px solid black;\">Modified</th>\
+                <th onclick=\"sortTable(4, x => x)\" style=\"border: 1px solid black;\">Accessed</th>\
             </tr>\
             {}\
             </table>\r\n{}\r\n",
@@ -330,37 +333,6 @@ fn system_time_to_string(system_time: io::Result<SystemTime>) -> String {
     };
 }
 
-/// Takes a file system `Path` and returns the (HTML) content:
-///   Case A) `fs_path` specifies a file: return the content of that file
-///   Case B) `fs_path` specifies a directory: return a list of hyperlinks ('<a href>'s) to all the files in that dir
-///   Case C) `fs_path` specifies neither a file nor a directory: return the error string
-/// The `root_dir` argument is needed for Case B) to know how much of the path prefix to strip.
-#[allow(dead_code)] // Old code, now see 'dir_response'
-fn fs_path_to_content(fs_path: &Path, root_dir: &Path) -> Vec<u8> {
-    match fs::read(fs_path) {
-        Ok(data) => data, // The path specified a file which was successfully read, return the read data.
-        Err(_) => match fs::read_dir(fs_path) {
-            // Returns an iterator over the entries within a directory.
-            Ok(paths) => {
-                // The path specified a directory which was successfully opened(/"read").
-                let mut folder_items: Vec<String> = paths.map(|path| {
-                        path.unwrap().path().strip_prefix(root_dir).unwrap().display().to_string()
-                    }).collect(); // The only reason we collect into a Vector is so that we can sort the folder items alphabetically!
-                if !folder_items.is_empty() {
-                    folder_items.sort(); // Display the folder items in alphabetical order.
-                    folder_items.iter()
-                        .map(|path| { format!("<a href=\"/{}\">{}</a><br>\r\n", path, path.split('/').last().unwrap()) }) // turn the path Strings into HTML links; The "/" is important!
-                        .fold(String::from(""), |str1, str2| str1 + &str2) // concatenate all the Strings of the iterator together into 1 single String
-                        .into()
-                } else {
-                    "This folder is empty.".into() // Tell the user when a folder is empty instead of just giving him an empty page.
-                }
-            }
-            Err(error) => error.to_string().as_bytes().into(), // The path specified neither a file nor a directory!
-        },
-    }
-}
-
 /// Returns the current date/time in the format "%Y-%m-%d %H:%M:%S", for logging to console.
 fn date_time_str<'a>() -> DelayedFormat<StrftimeItems<'a>> {
     Local::now().format("%Y-%m-%d %H:%M:%S")
@@ -368,9 +340,9 @@ fn date_time_str<'a>() -> DelayedFormat<StrftimeItems<'a>> {
 
 // Source: https://www.w3schools.com/howto/howto_js_sort_table.asp
 const SORT_TABLE_JAVASCRIPT: &str =
-"<!-- Source of the script below: https://www.w3schools.com/howto/howto_js_sort_table.asp -->
+"<!-- Script below taken (and slightly adapted) from: https://www.w3schools.com/howto/howto_js_sort_table.asp -->
 <script>
-function sortTable(n) {
+function sortTable(n, apply_before) {
   var table, rows, switching, i, x, y, shouldSwitch, dir, switchcount = 0;
   table = document.getElementById(\"tableViewTable\");
   switching = true;
@@ -394,13 +366,13 @@ function sortTable(n) {
       /* Check if the two rows should switch place,
       based on the direction, asc or desc: */
       if (dir == \"asc\") {
-        if (x.innerHTML.toLowerCase() > y.innerHTML.toLowerCase()) {
+        if (apply_before(x.innerHTML.toLowerCase()) > apply_before(y.innerHTML.toLowerCase())) {
           // If so, mark as a switch and break the loop:
           shouldSwitch = true;
           break;
         }
       } else if (dir == \"desc\") {
-        if (x.innerHTML.toLowerCase() < y.innerHTML.toLowerCase()) {
+        if (apply_before(x.innerHTML.toLowerCase()) < apply_before(y.innerHTML.toLowerCase())) {
           // If so, mark as a switch and break the loop:
           shouldSwitch = true;
           break;
