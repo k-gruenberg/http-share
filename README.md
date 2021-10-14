@@ -3,7 +3,7 @@
 
 ## Features
 
-* Memory-efficient video streaming.
+* Memory-efficient video streaming (thanks to contributor [linuskmr](https://github.com/linuskmr)).
 * Protect the server with a custom username and password (HTTP Basic Authentication).
 * View the files in a folder in 3 different views/layouts: a basic *List View*, *Table View* (sortable columns!) and *Grid View* (pictures shown, thumbnails for videos).
 * *ffmpeg*-generated thumbnails for .mp4 files in *Grid View*.
