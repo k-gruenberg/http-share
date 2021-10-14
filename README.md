@@ -21,7 +21,7 @@ The terminal output of the started *http_share* binary: all HTTP requests are lo
 
 List View (default):
 ![](images/list_view.png "")
-/Users/kendrick/Documents/Github_k-gruenberg/http-share
+
 Table View:
 ![](images/table_view.png "")
 
