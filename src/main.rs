@@ -55,8 +55,9 @@ fn main() {
         let username = username.clone(); // https://github.com/rust-lang/rust/issues/41851#issuecomment-332276034
         let password = password.clone();
         thread::spawn(move || {
+            let ip_addr: String = stream.peer_addr().map_or("???".to_string(), |addr| addr.to_string());
             handle_connection(stream, username, password).unwrap_or_else(
-                |err_str| {eprintln!("{}", Red.paint(format!("[{}] Error: {}", date_time_str(), err_str)))}
+                |err_str| {eprintln!("{}", Red.paint(format!("[{}] Error while serving {}: {}", date_time_str(), ip_addr, err_str)))}
             );
         });
     }
@@ -71,7 +72,7 @@ fn handle_connection(mut stream: TcpStream, username: String, password: String) 
         Ok(http_request) => http_request,
         Err(_err) => {
             HTTPResponse::new_500_server_error("Could not read HTTP request").send_to_tcp_stream(&mut stream)?;
-            return Err(Error::new(ErrorKind::Other, format!("TCP stream from {:?} could not be read!", stream.peer_addr())));
+            return Err(Error::new(ErrorKind::Other, "TCP stream could not be read!"));
         }
     };
     let get_path: &str = http_request.get_get_path();
@@ -83,11 +84,11 @@ fn handle_connection(mut stream: TcpStream, username: String, password: String) 
               if provided_uname == username && provided_pw == password => {}, // Uname & PW ok, do nothing and continue...
             Some((provided_uname, provided_pw)) => { // An invalid authorization was provided:
                 HTTPResponse::new_401_unauthorized("").send_to_tcp_stream(&mut stream)?;
-                return Err(Error::new(ErrorKind::Other, format!("{} requested {} with incorrect credentials: {}:{}", stream.peer_addr().map_or("???".to_string(), |addr| addr.to_string()), get_path, provided_uname, provided_pw)));
+                return Err(Error::new(ErrorKind::Other, format!("requested {} with incorrect credentials: {}:{}", get_path, provided_uname, provided_pw)));
             }
             None => { // No authorization was provided:
                 HTTPResponse::new_401_unauthorized("").send_to_tcp_stream(&mut stream)?;
-                return Err(Error::new(ErrorKind::Other, format!("{} requested {} without giving credentials!", stream.peer_addr().map_or("???".to_string(), |addr| addr.to_string()), get_path)));
+                return Err(Error::new(ErrorKind::Other, format!("requested {} without giving credentials!", get_path)));
             }
         }
     }
@@ -95,7 +96,7 @@ fn handle_connection(mut stream: TcpStream, username: String, password: String) 
     // Sanity check the requested GET path for security reasons:
     if !get_path.starts_with('/') {
         HTTPResponse::new_500_server_error("GET path does not start with a '/'!").send_to_tcp_stream(&mut stream)?;
-        return Err(Error::new(ErrorKind::Other, format!("{} requested {} which does not start with a '/'!", stream.peer_addr().map_or("???".to_string(), |addr| addr.to_string()), get_path)));
+        return Err(Error::new(ErrorKind::Other, format!("requested {} which does not start with a '/'!", get_path)));
     }
 
     // Log the HTTP request to console:

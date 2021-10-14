@@ -11,6 +11,12 @@
 * Unicode/UTF-8 support for file/folder names.
 * Tested on iOS (support for HTTP range requests).
 
+## Installation
+
+0. If you haven't installed *Rust* / *rustup* yet, go to [https://www.rust-lang.org/tools/install](https://www.rust-lang.org/tools/install) and follow the instructions for your operating system. 
+1. `rustup update`
+2. `cargo install --git https://github.com/k-gruenberg/http-share`
+
 ## Screenshots
 
 A folder with some files and the *http_share* binary:
@@ -42,7 +48,3 @@ Subfolders work too, of course, the current location/directory is shown at the v
 
 HTTP Basic Authentication:
 ![](images/http_basic_auth.png "")
-
-## ToDo's
-
-* Include IP address in 'File Response error' and 'Directory Response error' messages.
