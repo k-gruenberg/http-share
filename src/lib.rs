@@ -112,6 +112,13 @@ impl HTTPResponse {
         Self { http_response }
     }
 
+    /// Create a new '403 Forbidden' HTTP response.
+    pub fn new_403_forbidden(content: &mut Vec<u8>) -> Self {
+        let mut http_response: Vec<u8> = format!("HTTP/1.1 403 Forbidden\r\nContent-Length: {}\r\n\r\n", content.len()).as_bytes().into();
+        http_response.append(content);
+        Self { http_response }
+    }
+
     /// Create a new '404 Not Found' HTTP response.
     pub fn new_404_not_found<T: AsRef<str>>(filename: T) -> Self {
         let message = format!("Error: Could not find file {}", filename.as_ref());
