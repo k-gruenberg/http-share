@@ -38,6 +38,32 @@ fn main() {
     
     println!("[{}] Starting server...", date_time_str());
 
+    let mut port = 8080; // default port
+    let listener: TcpListener;
+    loop {
+        if port > 8180 { // Stop trying out ports after reaching 8180:
+            eprintln!("{}", Red.paint(format!("[{}] Error: Server was not started because ports 8080 - 8180 are all already in use!", date_time_str())));
+            return;
+        }
+        match TcpListener::bind(format!("0.0.0.0:{}", port)) {
+            Ok(tcp_listener) => {
+                listener = tcp_listener;
+                break;
+            },
+            Err(err) => {
+                if err.to_string().contains("Address already in use") {
+                    port += 1;
+                    continue;
+                } else {
+                    eprintln!("{}", Red.paint(format!("[{}] Error: Server could not be started as creating a TCP listener failed: {}", date_time_str(), err)));
+                    return;
+                }
+            }
+        }
+    }
+
+    /*
+    // Version that only tries out port 8080:
     let listener = match TcpListener::bind("0.0.0.0:8080") {
         Ok(listener) => listener,
         Err(err) => {
@@ -45,6 +71,7 @@ fn main() {
             return;
         }
     };
+     */
 
     println!("[{}] Server started on {}.", date_time_str(), listener.local_addr().map_or("???".to_string(), |addr| addr.to_string()));
 
