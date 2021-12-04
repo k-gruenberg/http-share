@@ -2,7 +2,7 @@ use percent_encoding::{percent_decode_str, utf8_percent_encode, NON_ALPHANUMERIC
 use std::env;
 use std::fs;
 use std::io::{self, Error, ErrorKind, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{TcpListener, TcpStream, IpAddr};
 use std::path::{Path, PathBuf};
 use std::thread;
 use http_share::{HTTPRequest, HTTPResponse};
@@ -10,9 +10,11 @@ use chrono::Local;
 use chrono::format::{StrftimeItems, DelayedFormat};
 use std::process::Command;
 use separator::Separatable;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Utc, Duration};
 use std::time::SystemTime;
 use ansi_term::Colour::Red;
+use std::collections::HashMap;
+use std::ops::Add;
 
 fn main() {
     println!(); // separator
@@ -35,6 +37,12 @@ fn main() {
     }
 
     println!(); // separator
+
+    // Maps IP addresses to the number of wrong password attempts they made so far:
+    let mut wrong_password_attempts: HashMap<IpAddr, usize> = HashMap::new();
+    // Maps those IP addresses that were blocked because of too many wrong password attempts to the
+    // time they shall be unblocked again:
+    let mut blocked_ips: HashMap<IpAddr, DateTime<Local>> = HashMap::new();
     
     println!("[{}] Starting server...", date_time_str());
 
@@ -52,13 +60,43 @@ fn main() {
     for stream in listener.incoming() {
         let stream = stream.expect("The iterator returned by incoming() will never return None");
 
+        // Check if the IP is blocked and act accordingly if necessary:
+        let ip = stream.peer_addr().unwrap().ip(); // ToDo: no "unwrap" outside of thread!!
+        match blocked_ips.get(&ip) {
+            None => {} // IP is not blocked => continue as normal.
+            Some(&unblock_time) if &unblock_time >= &Local::now() => { // IP is blocked but time has run out:
+                blocked_ips.remove(&ip); // Unblock IP...
+                wrong_password_attempts.remove(&ip); // ...reset counter...
+                // ...and continue as normal.
+            },
+            Some(&unblock_time) => { // IP is blocked and unblock time hasn't run out yet:
+                // Respond with a "403 Forbidden" to tell the client that his IP is currently blocked:
+                HTTPResponse::new_403_forbidden(
+                    &mut "Your IP is temporarily blocked because of too many login attempts!".as_bytes().into()
+                ).send_to_tcp_stream(&mut stream);
+                // Log the blocked attempt to console:
+                eprintln!("{}", Red.paint(format!("[{}] Rejected a request by {} because the IP is blocked!", date_time_str(), ip)));
+                // Continue listening for the next incoming connection:
+                continue;
+            }
+        }
+
         let username = username.clone(); // https://github.com/rust-lang/rust/issues/41851#issuecomment-332276034
         let password = password.clone();
         thread::spawn(move || {
-            let ip_addr: String = stream.peer_addr().map_or("???".to_string(), |addr| addr.to_string());
-            handle_connection(stream, username, password).unwrap_or_else(
-                |err_str| {eprintln!("{}", Red.paint(format!("[{}] Error while serving {}: {}", date_time_str(), ip_addr, err_str)))}
-            );
+            let peer_addr: String = stream.peer_addr().map_or("???".to_string(), |addr| addr.to_string());
+            handle_connection(stream, username, password).unwrap_or_else(|err_str| {
+                eprintln!("{}", Red.paint(format!("[{}] Error while serving {}: {}", date_time_str(), peer_addr, err_str)));
+                if err_str.to_string().contains("incorrect credentials") {
+                    // Increase the `wrong_password_attempts` for this IP address:
+                    let old_value = wrong_password_attempts.get(&ip).unwrap_or(&0).clone();
+                    wrong_password_attempts.insert(ip, old_value + 1);
+                    // Block this IP address for 5 minutes when the `wrong_password_attempts` counter has reached 10:
+                    if old_value >= 9 {
+                        blocked_ips.insert(ip, Local::now() + Duration::minutes(5));
+                    }
+                }
+            });
         });
     }
 }
