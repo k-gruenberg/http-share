@@ -16,6 +16,8 @@ use chrono::{DateTime, Utc};
 use std::time::SystemTime;
 use ansi_term::Colour::Red;
 use lazy_static::lazy_static;
+use rand::thread_rng;
+use rand::seq::SliceRandom;
 
 fn main() {
     println!(); // separator
@@ -271,7 +273,19 @@ fn dir_response(dir_path: &Path, root_dir: &Path, stream: &mut TcpStream, query_
         .map(|path| { path.unwrap().path().strip_prefix(root_dir).unwrap().display().to_string() }) // turn a path ("ReadDir") iterator into a String iterator
         .collect(); // The only reason we collect into a Vector is so that we can sort the folder items alphabetically!
     let html_body: String = if !folder_items.is_empty() {
-        folder_items.sort_by(|a,b| a.to_lowercase().cmp(&b.to_lowercase())); // Display the folder items in alphabetical order (but case-insensitive!)
+        // Take care of the sorting preference / the "sort=..." URL GET parameter:
+        match query_string
+            .map(|query_str| query_str.split("&").find(|param| param.starts_with("sort=")))
+            .flatten()
+        {
+            // Sort Descending: Display the folder items in reverse alphabetical order (but case-insensitive!):
+            Some("sort=desc") => folder_items.sort_by(|a,b| b.to_lowercase().cmp(&a.to_lowercase())),
+            // Sort Randomly:
+            Some("sort=rand") => folder_items.shuffle(&mut thread_rng()),
+            // Default = Sort Ascending: Display the folder items in alphabetical order (but case-insensitive!):
+            _ => folder_items.sort_by(|a,b| a.to_lowercase().cmp(&b.to_lowercase()))
+        }
+
         format_body(folder_items, query_string, dir_path.strip_prefix(root_dir).unwrap().display().to_string())
     } else {
         "This folder is empty.".to_string() // Tell the user when a folder is empty instead of just giving him an empty page.
@@ -298,7 +312,10 @@ fn format_body(folder_items: Vec<String>, query_string: Option<&str>, dir_path: 
     let folder_items = folder_items.iter()
         .map(|path| { format_path(path, query_string) }); // turn the path Strings into HTML links, possibly within a <td>-tag
 
-    let lower_body = match query_string {
+    let lower_body = match query_string
+            .map(|query_str| query_str.split("&").find(|param| param.starts_with("view=")))
+            .flatten()
+    {
         // Grid View (previously called Table View!):
         Some("view=grid") => format!(
             "<table style=\"table-layout:fixed;width:100%;\">\r\n{}</table>\r\n",
@@ -335,9 +352,29 @@ fn format_body(folder_items: Vec<String>, query_string: Option<&str>, dir_path: 
     // At last, add the "header" (including links/buttons that let the user change the layout):
     return format!( // The leading slash ('/') of the path is added manually, cf. `format_path`.
         "/{} <i>({} items)</i><br>\r\n\
-         <a href=\"javascript:window.location.search='view=list';\">List View</a>  |  \r\n\
-         <a href=\"javascript:window.location.search='view=table';\">Table View</a>  |  \r\n\
-         <a href=\"javascript:window.location.search='view=grid';\">Grid View</a><br>\r\n\
+         <script>\
+             function setURLSearchParams(view, sort) {{ \
+                 if (view == null) {{ /* ...then use current value... */
+                     view = window.location.search.split('&').filter(param => param.includes('view='))[0]?.split('=')[1];
+                 }}
+                 if (view == null) {{ /* ...or else the default value: */
+                     view = 'list';
+                 }}
+                 if (sort == null) {{ /* ...then use current value... */
+                     sort = window.location.search.split('&').filter(param => param.includes('sort='))[0]?.split('=')[1];
+                 }}
+                 if (sort == null) {{ /* ...or else the default value: */
+                     sort = 'asc';
+                 }}
+                 window.location.search = '?view=' + view + '&sort=' + sort;\
+             }}\
+         </script>\
+         <a href=\"javascript:setURLSearchParams('list', null);\">List View</a>  |  \r\n\
+         <a href=\"javascript:setURLSearchParams('table', null);\">Table View</a>  |  \r\n\
+         <a href=\"javascript:setURLSearchParams('grid', null);\">Grid View</a><br>\r\n\
+         Sort: <a href=\"javascript:setURLSearchParams(null, 'asc');\">Ascending</a>  |  \r\n\
+         <a href=\"javascript:setURLSearchParams(null, 'desc');\">Descending</a>  |  \r\n\
+         <a href=\"javascript:setURLSearchParams(null, 'rand');\">Randomly</a><br>\r\n\
          <hr><br>\r\n\
          {}",
         dir_path, folder_size, lower_body
@@ -352,7 +389,10 @@ fn format_path(path: &String, query_string: Option<&str>) -> String {
     let hyperlink = utf8_percent_encode(path, NON_ALPHANUMERIC).to_string();
     let display_name = path.split('/').last().unwrap(); // only display the file name to the user
 
-    match query_string {
+    match query_string
+        .map(|query_str| query_str.split("&").find(|param| param.starts_with("view=")))
+        .flatten()
+    {
         // Grid View (previously called Table View!):
         Some("view=grid") => {
             if path.ends_with(".mp4") { // Display ffmpeg generated thumbnails for .mp4 files:
