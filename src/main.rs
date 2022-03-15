@@ -10,7 +10,6 @@ use http_share::{HTTPRequest, HTTPResponse};
 use chrono::Local;
 use chrono::format::{StrftimeItems, DelayedFormat};
 use std::process::Command;
-use std::sync::Mutex;
 use separator::Separatable;
 use chrono::{DateTime, Utc};
 use std::time::SystemTime;
@@ -18,6 +17,7 @@ use ansi_term::Colour::Red;
 use lazy_static::lazy_static;
 use rand::thread_rng;
 use rand::seq::SliceRandom;
+use std::sync::RwLock;
 
 fn main() {
     println!(); // separator
@@ -201,7 +201,7 @@ fn handle_connection(mut stream: TcpStream, username: String, password: String) 
 
 lazy_static! {
     /// Cached JPEG thumbnails of video files whose thumbnail was already requested before.
-    static ref CACHED_THUMBNAILS: Mutex<HashMap<PathBuf, Vec<u8>>> = Mutex::new(HashMap::new());
+    static ref CACHED_THUMBNAILS: RwLock<HashMap<PathBuf, Vec<u8>>> = RwLock::new(HashMap::new());
 }
 
 /// Responds to `stream` with the file contents queried by `filepath`.
@@ -209,10 +209,14 @@ fn file_response(http_request: &HTTPRequest, filepath: &Path, stream: &mut TcpSt
     // Check if a thumbnail of a video was requested:
     if let Some("thumbnail") = query_string { // A thumbnail request:
         HTTPResponse::new_200_ok(
-            &mut CACHED_THUMBNAILS.lock().unwrap()
-                .entry(PathBuf::from(filepath))
-                .or_insert_with(|| generate_jpeg_thumbnail(filepath))
-                .clone() // Cloning is necessary because `new_200_ok` mutates the Vec it's given, emptying it!!
+            &mut if CACHED_THUMBNAILS.read().unwrap().contains_key(&PathBuf::from(filepath)) {
+                CACHED_THUMBNAILS.read().unwrap()[&PathBuf::from(filepath)].clone()
+            } else {
+                CACHED_THUMBNAILS.write().unwrap()
+                    .entry(PathBuf::from(filepath))
+                    .or_insert_with(|| generate_jpeg_thumbnail(filepath))
+                    .clone() // Cloning is necessary because `new_200_ok` mutates the Vec it's given, emptying it!!
+            }
         ).send_to_tcp_stream(stream)?;
     } else { // No thumbnail request, respond with a regular file response:
         // Because of iOS we have to differentiate between 2 cases, a normal "full response" and a "range response" (for videos):
