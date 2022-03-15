@@ -40,14 +40,25 @@ fn main() {
     }
 
     println!(); // separator
+
+    println!("Do you wish to use a custom port? Hit ENTER to use port 8080:");
+    print!("Port: ");
+    io::stdout().flush().unwrap();
+    let mut custom_port_str = String::new();
+    io::stdin().read_line(&mut custom_port_str).unwrap();
+    custom_port_str = custom_port_str.trim().to_string();
+    let custom_port: Option<i32> = if custom_port_str == "" {None} else {custom_port_str.parse::<i32>().ok()};
+
+    println!(); // separator
     
     println!("[{}] Starting server...", date_time_str());
 
-    let mut port = 8080; // default port
+    let initial_port = custom_port.unwrap_or(8080); // the port to initially try. 8080 = default port
+    let mut port = initial_port;
     let listener: TcpListener;
     loop {
-        if port > 8180 { // Stop trying out ports after reaching 8180:
-            eprintln!("{}", Red.paint(format!("[{}] Error: Server was not started because ports 8080 - 8180 are all already in use!", date_time_str())));
+        if port > initial_port + 100 { // Stop trying out ports after having tried 101 ports (the initial one + 100 more):
+            eprintln!("{}", Red.paint(format!("[{}] Error: Server was not started because ports {} - {} are all already in use!", date_time_str(), initial_port, initial_port + 100)));
             return;
         }
         match TcpListener::bind(format!("0.0.0.0:{}", port)) {
