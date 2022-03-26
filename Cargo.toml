@@ -14,3 +14,7 @@ base64 = "0.13.0"
 ansi_term = "0.12"
 lazy_static = "1.4.0"
 rand = "0.8.5"
+md5 = "0.7.0"
+clap = { version = "3.0.5", features = ["derive"] }
+ring = "0.16.20"
+hex = "0.4"

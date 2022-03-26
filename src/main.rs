@@ -15,11 +15,27 @@ use chrono::{DateTime, Utc};
 use std::time::SystemTime;
 use ansi_term::Colour::Red;
 use lazy_static::lazy_static;
-use rand::thread_rng;
+use rand::{Rng, thread_rng};
 use rand::seq::SliceRandom;
 use std::sync::RwLock;
+use ring::hmac;
+use ring::rand::SystemRandom;
+
+const REALM_NAME: &str = "";
+
+lazy_static! {
+    /// A global constant secret only known to the server, generated once on server startup.
+    /// Used for the HMAC's used for the HTTP Digest Authentication.
+    ///
+    /// Source: https://docs.rs/ring/latest/ring/hmac/index.html
+    static ref GLOBAL_SERVER_SECRET: hmac::Key = hmac::Key::generate(hmac::HMAC_SHA256, &SystemRandom::new()).unwrap();
+}
 
 fn main() {
+    println!(); // separator
+
+    println!("Note: For a quick and simple setup, just hit ENTER repeatedly until the server is started!");
+
     println!(); // separator
     
     println!("Please provide credentials or hit ENTER two times to not use any authorization:");
@@ -33,8 +49,15 @@ fn main() {
     let mut password = String::new();
     io::stdin().read_line(&mut password).unwrap();
     password = password.trim().to_string();
+    let mut use_http_digest_access_authentication = true; // = false means use HTTP Basic Authentication
     if username != "" || password != "" {
         println!("Credentials set to: Username: \"{}\" & Password: \"{}\"", username, password);
+        print!("Do you wish to use the insecure/unencrypted HTTP Basic Authentication instead of the default Digest Access Authentication? [y/N]");
+        io::stdout().flush().unwrap();
+        let mut user_answer_str = String::new();
+        io::stdin().read_line(&mut user_answer_str).unwrap();
+        user_answer_str = user_answer_str.trim().to_string();
+        use_http_digest_access_authentication = user_answer_str.to_lowercase() != "y"; // use HTTP Digest Access Authentication, unless the user entered "y" (or "Y")
     } else {
         println!("No credentials set.");
     }
@@ -99,7 +122,7 @@ fn main() {
         let password = password.clone();
         thread::spawn(move || {
             let ip_addr: String = stream.peer_addr().map_or("???".to_string(), |addr| addr.to_string());
-            handle_connection(stream, username, password).unwrap_or_else(
+            handle_connection(stream, username, password, use_http_digest_access_authentication).unwrap_or_else(
                 |err_str| {eprintln!("{}", Red.paint(format!("[{}] Error while serving {}: {}", date_time_str(), ip_addr, err_str)))}
             );
         });
@@ -109,7 +132,7 @@ fn main() {
 /// Handles a connection coming from `stream`.
 /// When `username != "" || password != ""` it also checks whether the correct `username` and
 /// `password` were provided – if not, it responds with a '401 Unauthorized'.
-fn handle_connection(mut stream: TcpStream, username: String, password: String) -> std::io::Result<()> {
+fn handle_connection(mut stream: TcpStream, username: String, password: String, use_http_digest_access_authentication: bool) -> std::io::Result<()> {
     // Read and parse the HTTP request:
     let http_request: HTTPRequest = match HTTPRequest::read_from_tcp_stream(&mut stream) {
         Ok(http_request) => http_request,
@@ -122,16 +145,49 @@ fn handle_connection(mut stream: TcpStream, username: String, password: String) 
 
     // Do the HTTP Auth check:
     if username != "" || password != "" { // A username and password are necessary, i.e. auth protection is turned on:
-        match http_request.get_authorization() {
-            Some((provided_uname, provided_pw))
-              if provided_uname == username && provided_pw == password => {}, // Uname & PW ok, do nothing and continue...
-            Some((provided_uname, provided_pw)) => { // An invalid authorization was provided:
-                HTTPResponse::new_401_unauthorized("").send_to_tcp_stream(&mut stream)?;
-                return Err(Error::new(ErrorKind::Other, format!("requested {} with incorrect credentials: {}:{}", get_path, provided_uname, provided_pw)));
+        if use_http_digest_access_authentication { // use HTTP Digest Access Authentication:
+            match http_request.verify_digest_authorization(&username, &password,  REALM_NAME,
+                                                           |nonce, opaque|
+                                                               {
+                                                                   let expiration_timestamp_str = String::from_utf8(hex::decode(opaque.split("+").nth(0).unwrap()).unwrap_or(Vec::new())).unwrap_or(String::new());
+                                                                   let expiration_timestamp = DateTime::parse_from_str(&expiration_timestamp_str, "%Y-%m-%d %H:%M:%S");
+                                                                   if expiration_timestamp.is_err() || expiration_timestamp.unwrap() > Local::now() { // expired (or invalid):
+                                                                       return false; // expiration_timestamp has expired: do not accept signatures of this nonce anymore!
+                                                                   }
+                                                                   let signature = hex::decode(opaque.split("+").nth(1).unwrap_or("")).unwrap_or(Vec::new());
+                                                                   let client_ip_addr = stream.peer_addr().expect("");
+                                                                   let msg = format!("{}:{}:{}", nonce, expiration_timestamp_str, client_ip_addr);
+                                                                   return hmac::verify(&GLOBAL_SERVER_SECRET, msg.as_bytes(), &*signature).is_ok();
+                                                               },
+                                                           None)
+            {
+                Ok(true) => {}, // Authentication successful, do nothing and continue...
+                Ok(false) => { // No or an incorrect Authentication:
+                    let nonce = hex::encode(rand::thread_rng().gen::<[u8; 32]>()); // = a new random nonce for every request
+                    let expiration_timestamp = hex::encode((Local::now() + chrono::Duration::minutes(4)).format("%Y-%m-%d %H:%M:%S").to_string()); // = TIME_WAIT = 2*MSL = 2*120sec
+                    let client_ip_addr = stream.peer_addr().expect("Could not get client ip address, necessary for HMAC used as opaque for HTTP Digest Authentication");
+                    let msg = format!("{}:{}:{}", nonce, expiration_timestamp, client_ip_addr);
+                    let opaque = expiration_timestamp + "+" + &*hex::encode(hmac::sign(&GLOBAL_SERVER_SECRET, msg.as_bytes()).as_ref()); // = (expiration_timestamp, HMAC(GLOBAL_SERVER_SECRET; nonce, expiration_timestamp, client_ip_addr))
+                    HTTPResponse::new_401_unauthorized_digest(REALM_NAME, nonce, opaque, false, false).send_to_tcp_stream(&mut stream)?;
+                    return Err(Error::new(ErrorKind::Other, format!("requested {} with an incorrect or without a digest authentication", get_path)));
+                },
+                Err(err) => { // Incomplete or syntactically incorrect Authentication:
+                    HTTPResponse::new_400_bad_request(&mut "Incomplete or syntactically incorrect digest authentication provided".as_bytes().to_vec()).send_to_tcp_stream(&mut stream)?;
+                    return Err(Error::new(ErrorKind::Other, format!("requested {} with an incomplete or with a syntactically incorrect digest authentication: {}", get_path, err)));
+                }
             }
-            None => { // No authorization was provided:
-                HTTPResponse::new_401_unauthorized("").send_to_tcp_stream(&mut stream)?;
-                return Err(Error::new(ErrorKind::Other, format!("requested {} without giving credentials!", get_path)));
+        } else { // use HTTP Basic Authentication (insecure! pw transmitted in plain text! pw check vulnerable to timing attacks!):
+            match http_request.get_authorization() {
+                Some((provided_uname, provided_pw))
+                if provided_uname == username && provided_pw == password => {}, // Uname & PW ok, do nothing and continue...
+                Some((provided_uname, provided_pw)) => { // An invalid authorization was provided:
+                    HTTPResponse::new_401_unauthorized(REALM_NAME).send_to_tcp_stream(&mut stream)?;
+                    return Err(Error::new(ErrorKind::Other, format!("requested {} with incorrect credentials: {}:{}", get_path, provided_uname, provided_pw)));
+                }
+                None => { // No authorization was provided:
+                    HTTPResponse::new_401_unauthorized(REALM_NAME).send_to_tcp_stream(&mut stream)?;
+                    return Err(Error::new(ErrorKind::Other, format!("requested {} without giving credentials!", get_path)));
+                }
             }
         }
     }
