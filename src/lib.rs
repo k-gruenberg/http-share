@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, Read, Write, Seek, SeekFrom};
 use std::net::TcpStream;
@@ -56,7 +57,8 @@ impl HTTPRequest {
     /// Reads the 'Authorization' header of this HTTP request, decodes it (Base64) and returns
     /// `Some((username, password))` or `None` when no (or an invalid) 'Authorization' header was
     /// provided.
-    /// Only the 'Basic' authentication scheme is supported.
+    ///
+    /// This only works with the 'Basic' authentication scheme!
     pub fn get_authorization(&self) -> Option<(String, String)> {
         // https://de.wikipedia.org/wiki/HTTP-Authentifizierung
         //   Example: "Authorization: Basic d2lraTpwZWRpYQ=="
@@ -68,6 +70,150 @@ impl HTTPRequest {
         let base64_decoded = String::from_utf8(base64::decode(base64_encoded).ok()?).ok()?;
         let mut uname_and_pw = base64_decoded.split(":");
         return Some((uname_and_pw.next()?.to_string(), uname_and_pw.next()?.to_string()));
+    }
+
+
+    /// Verify the Authorization provided by the client in the "Authorization" request header.
+    /// Returns `Ok(true)` when the client successfully authorized itself.
+    /// Returns `Ok(false)` when the client provided no or an incorrect Authorization.
+    /// Returns `Err` when either an incomplete or an incorrectly formatted (syntax) Authorization was provided.
+    ///
+    /// This only works with the 'Digest' authentication scheme!
+    ///
+    /// The `nonce_opaque_verifier` takes the server nonce as returned by the client as its 1st
+    /// argument and the server's opaque as returned by the client as its 2nd argument.
+    /// It shall verify that the nonce actually came from the server and that it is not too old,
+    /// i.e. expired. One may also check whether it was intended for the correct ip address.
+    /// A common way to do that is to choose the *opaque* as an HMAC of the server *nonce*.
+    ///
+    /// When `opaque` is set to `None` it is not verified whether the client responded with
+    /// the same 'opaque' value in its request header or even whether the client gave an 'opaque'
+    /// value in its request header at all.
+    /// When `opaque` is set to `Some` and the client responded either with no or with a different
+    /// 'opaque' value in its request header, this functions returns `Some(false)` even when the client
+    /// otherwise correctly identified itself!
+    ///
+    /// When `last_counter` ist set to `Some` it is ensured that the hexadecimal counter (nc)
+    /// of this request is strictly larger! This is to prevent replay attacks.
+    /// This also means that the usage of RFC 2617 instead of the old RFC 2069 is required.
+    /// When `last_counter` ist set to `None` no such check is performed and an attacker could
+    /// request the same site/URI with the same credentials again.
+    /// This should only be a security issue for non-static websites.
+    /// When `last_counter` ist set to `None`, the legacy RFC 2069 may be used.
+    ///
+    /// Integrity protection ("auth-int") is currently **not** supported/checked!
+    pub fn verify_digest_authorization<F>(&self, username: &str, password: impl Display, realm: &str, nonce_opaque_verifier: F, last_counter: Option<u128>) -> Result<bool, String>
+        where F: Fn(&str, &str) -> bool
+    {
+        /*
+        Example of a client request with username "Mufasa" and password "Circle Of Life"
+        (from https://en.wikipedia.org/wiki/Digest_access_authentication#Example_with_explanation):
+
+        GET /dir/index.html HTTP/1.0
+        Host: localhost
+        Authorization: Digest username="Mufasa",
+                             realm="testrealm@host.com",
+                             nonce="dcd98b7102dd2f0e8b11d0f600bfb0c093",
+                             uri="/dir/index.html",
+                             qop=auth,
+                             nc=00000001,
+                             cnonce="0a4f113b",
+                             response="6629fae49393a05397450978507c4ef1",
+                             opaque="5ccc069c403ebaf9f0171e9517f40e41"
+         */
+
+        if !self.http_request.contains("Authorization: Digest ") {
+            return Ok(false); // the client provided no (digest) Authorization at all.
+        }
+
+        // 1.) parse the key value pairs provided in the Authorization HTTP header into a HashMap:
+        let given_key_value_pairs: HashMap<&str, &str> = self.http_request
+            .split("Authorization: Digest ")
+            .nth(1).ok_or("client's request header does not contain substring 'Authorization: Digest '")? // should never occur/always succeed due to check above
+            .split(",")
+            .map(|key_value_pair| key_value_pair.trim())
+            .map(|kv_pair| (kv_pair.split("=").nth(0).unwrap_or(""), kv_pair.split("=").nth(1).unwrap_or("")))
+            .map(|(key, value)| (key, value.strip_prefix("\"").map(|v| v.strip_suffix("\"")).flatten().unwrap_or(value)))
+            .collect();
+
+        // 2.) put all the values of interest into separate variables:
+        let given_username: &str = given_key_value_pairs.get("username").ok_or("client specified no 'username' in Authorization header field")?;
+        let given_realm: &str = given_key_value_pairs.get("realm").ok_or("client specified no 'realm' in Authorization header field")?;
+        let given_nonce: &str = given_key_value_pairs.get("nonce").ok_or("client specified no 'nonce' in Authorization header field")?;
+        let given_uri: &str = given_key_value_pairs.get("uri").ok_or("client specified no 'uri' in Authorization header field")?;
+        let given_qop: Option<&&str> = given_key_value_pairs.get("qop"); // qop was only added with RFC 2617, therefore it's optional
+        let given_nc: Option<&&str> = given_key_value_pairs.get("nc"); // nonce counter was only added with RFC 2617, therefore it's optional
+        let given_cnonce: Option<&&str> = given_key_value_pairs.get("cnonce"); // client-generated random nonce was only added with RFC 2617, therefore it's optional
+        let given_response: &str = given_key_value_pairs.get("response").ok_or("client specified no 'response' in Authorization header field")?;
+        let given_opaque: &str = given_key_value_pairs.get("opaque").ok_or("client specified no 'opaque' in Authorization header field")?;
+
+        // 3.) verify some of the given values:
+        if given_username != username || given_realm != realm {
+            return Ok(false); // reject authorizations for the incorrect username or realm
+        }
+        if !nonce_opaque_verifier(given_nonce, given_opaque) {
+            return Ok(false); // reject incorrect nonce's (correctness of the nonce is verified using the opaque value)
+        }
+        if given_uri != self.get_get_path() {
+            return Ok(false);
+        }
+        if last_counter != None && (given_nc == None || u128::from_str_radix(given_nc.unwrap(), 16).ok().ok_or("could not parse 'nc' to an int")? <= last_counter.unwrap()) {
+            return Ok(false); // request counter (nc) not strictly increasing (or not even provided)! replay attack detected!
+        }
+
+        // 4.) compute the expected value/md5 hash for the "response" value:
+        let ha1 = md5::compute(format!("{}:{}:{}", username, realm, password));
+        let ha2 = md5::compute(format!("GET:{}", self.get_get_path()));
+        let expected_response =
+        if given_qop.is_some() && given_nc.is_some() && given_cnonce.is_some() { // new RFC 2617:
+            md5::compute(
+                format!("{:x}:{}:{}:{}:{}:{:x}", ha1, given_nonce, given_nc.unwrap(), given_cnonce.unwrap(), given_qop.unwrap(), ha2)
+            )
+        } else if given_qop.is_none() && given_nc.is_none() && given_cnonce.is_none() { // old RFC 2069:
+            // Note when last_counter.is_some() this piece of code is unreachable!!
+            md5::compute(
+                format!("{:x}:{}:{:x}", ha1, given_nonce, ha2)
+            )
+        } else {
+            return Err(String::from("an invalid mix between the old RFC 2069 and the new RFC 2617: qop, nc, cnonce are only partially specified"));
+        };
+        let expected_response_hex = format!("{:x}", expected_response); // to hexadecimal
+
+        // 5.) compare the expected "response" value to the value actually given and return the result as a bool:
+        return Ok(given_response == expected_response_hex);
+
+        /*
+        From https://en.wikipedia.org/wiki/Digest_access_authentication#Example_with_explanation:
+
+        The "response" value is calculated in three steps, as follows. Where values are combined, they are delimited by colons.
+
+        1. The MD5 hash of the combined username, authentication realm and password is calculated.
+           The result is referred to as HA1.
+        2. The MD5 hash of the combined method and digest URI is calculated, e.g. of "GET" and
+           "/dir/index.html". The result is referred to as HA2.
+        3. The MD5 hash of the combined HA1 result, server nonce (nonce), request counter (nc),
+           client nonce (cnonce), quality of protection code (qop) and HA2 result is calculated.
+           The result is the "response" value provided by the client.
+
+        Since the server has the same information as the client, the response can be checked by
+        performing the same calculation. In the example given above the result is formed as follows,
+        where MD5() represents a function used to calculate an MD5 hash, backslashes represent a
+        continuation and the quotes shown are not used in the calculation.
+
+        Completing the example given in RFC 2617 gives the following results for each step.
+
+        HA1 = MD5( "Mufasa:testrealm@host.com:Circle Of Life" )
+            = 939e7578ed9e3c518a452acee763bce9
+
+        HA2 = MD5( "GET:/dir/index.html" )
+            = 39aff3a2bab6126f332b942af96d3366
+
+        Response = MD5( "939e7578ed9e3c518a452acee763bce9:\
+                         dcd98b7102dd2f0e8b11d0f600bfb0c093:\
+                         00000001:0a4f113b:auth:\
+                         39aff3a2bab6126f332b942af96d3366" )
+                 = 6629fae49393a05397450978507c4ef1
+         */
     }
 }
 
@@ -105,10 +251,52 @@ impl HTTPResponse {
         return Self { http_response };
     }
 
+    /// Create a new '400 Bad Request' HTTP response.
+    pub fn new_400_bad_request(content: &mut Vec<u8>) -> Self {
+        let mut http_response: Vec<u8> = format!("HTTP/1.1 400 Bad Request\r\nContent-Length: {}\r\n\r\n", content.len()).as_bytes().into();
+        http_response.append(content);
+        Self { http_response }
+    }
+
     /// Create a new '401 Unauthorized' HTTP response.
     /// The "Basic" authentication scheme is requested.
     pub fn new_401_unauthorized(realm_name: impl Display) -> Self {
         let http_response: Vec<u8> = format!("HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"{}\"\r\n\r\n", realm_name).as_bytes().into();
+        Self { http_response }
+    }
+
+    /// Create a new '401 Unauthorized' HTTP response.
+    /// The "Digest" authentication scheme is requested.
+    /// The `nonce` is the challenge to the client to authenticate itself.
+    /// `opaque` is a server-specified string that shall be returned unchanged in the Authorization
+    /// header by the client.
+    ///
+    /// The `qop_auth` and `qop_auth_int` parameters control the quality of protection (qop).
+    /// "auth-int" stands for *Authentication with integrity protection*.
+    /// When both are set to false, the qop directive is unspecified and the legacy RFC 2069
+    /// will be used. Otherwise, the newer RFC 2617 will be used.
+    /// RFC 2617 adds "quality of protection" (qop), nonce counter incremented by client,
+    /// and a client-generated random nonce.
+    pub fn new_401_unauthorized_digest(realm_name: impl Display, nonce: impl Display, opaque: impl Display, qop_auth: bool, qop_auth_int: bool) -> Self {
+        // cf. https://en.wikipedia.org/wiki/Digest_access_authentication#Example_with_explanation
+        // and https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/WWW-Authenticate
+        let http_response: Vec<u8> = format!(
+            "HTTP/1.1 401 Unauthorized\r\n\
+            WWW-Authenticate: Digest realm=\"{}\",\r\n\
+                                    {}\
+                                    nonce=\"{}\",\r\n\
+                                    opaque=\"{}\"\r\n\
+            \r\n",
+            realm_name,
+            match (qop_auth, qop_auth_int) {
+                (true, true) => "qop=\"auth,auth-int\",\r\n",
+                (true, false) => "qop=\"auth\",\r\n",
+                (false, true) => "qop=\"auth-int\",\r\n",
+                (false, false) => ""
+            },
+            nonce,
+            opaque
+        ).as_bytes().into();
         Self { http_response }
     }
 
