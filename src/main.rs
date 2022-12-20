@@ -347,7 +347,7 @@ fn format_body(folder_items: Vec<String>, query_string: Option<&str>, dir_path: 
         ),
         // Table View:
         Some("view=table") => format!(
-            "<table id=\"tableViewTable\" style=\"border-collapse: collapse\">\r\n\
+            "<table id=\"tableViewTable\" cellpadding=\"5\"  style=\"border-collapse: collapse\">\r\n\
             <tr>\
                 <th onclick=\"sortTable(0, x => x)\" style=\"border: 1px solid black;\">Name</th>\
                 <th onclick=\"sortTable(1, x => parseInt(x.replaceAll(',','')) || 0)\" style=\"border: 1px solid black;\">Size</th>\
